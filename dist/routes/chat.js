@@ -56,7 +56,14 @@ router.post('/', optionalAuth, limitChat, async (request, response) => {
             ],
         });
     }
-    catch {
+    catch (error) {
+        const status = typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
+            ? error.status
+            : undefined;
+        console.error('Groq chat completion failed', {
+            name: error instanceof Error ? error.name : 'UnknownError',
+            status,
+        });
         return response.status(502).json({ error: 'The AI assistant is temporarily unavailable. Please retry or contact hello@lemontrip.in.' });
     }
     const reply = completion.choices[0]?.message?.content?.trim();

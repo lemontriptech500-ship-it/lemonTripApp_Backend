@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { env } from './config.js';
 import { authRouter } from './routes/auth.js';
 import { bookingsRouter } from './routes/bookings.js';
+import { chatRouter } from './routes/chat.js';
 
 export const app = express();
 
@@ -17,6 +18,7 @@ app.get('/health', (_request, response) => {
 
 app.use('/api/auth', authRouter);
 app.use('/api/bookings', bookingsRouter);
+app.use('/api/chat', chatRouter);
 
 app.use((_request, response) => {
   response.status(404).json({ error: 'Route not found' });

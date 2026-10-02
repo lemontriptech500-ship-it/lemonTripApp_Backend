@@ -29,3 +29,17 @@ export const requireAuth = (request, response, next) => {
         return response.status(401).json({ error: 'Invalid or expired token' });
     }
 };
+export const optionalAuth = (request, _response, next) => {
+    const token = getBearerToken(request);
+    if (!token)
+        return next();
+    try {
+        const payload = jwt.verify(token, env.JWT_SECRET);
+        if (typeof payload !== 'string' && payload.sub)
+            request.user = { id: payload.sub, email: '', name: '', phone: null };
+    }
+    catch {
+        // Anonymous context is safer than trusting an invalid token.
+    }
+    return next();
+};

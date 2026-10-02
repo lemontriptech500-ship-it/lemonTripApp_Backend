@@ -56,6 +56,29 @@ before(async () => {
   await database.exec(migration);
   await database.exec('COMMIT');
   await database.exec(userPlatformMigration);
+  await database.exec(`
+    CREATE TABLE blog_posts (
+      id varchar PRIMARY KEY, category varchar NOT NULL, title varchar NOT NULL,
+      excerpt text NOT NULL, content text NOT NULL, image_url text,
+      published_at date, read_time varchar, created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE travel_packages (
+      id varchar PRIMARY KEY, destination varchar NOT NULL, duration varchar NOT NULL,
+      description text NOT NULL, starting_price varchar NOT NULL, highlights text[],
+      image_url text, created_at timestamptz NOT NULL DEFAULT now(), price_amount numeric,
+      currency char(3), category varchar
+    );
+    CREATE TABLE visa_services (
+      id text PRIMARY KEY, country text NOT NULL, visa_type text NOT NULL,
+      processing_time text, starting_from text, image_url text, documents text[]
+    );
+    INSERT INTO blog_posts (id, category, title, excerpt, content, image_url, published_at, read_time)
+    VALUES ('db-blog', 'Guide', 'Database blog', 'DB excerpt', E'First paragraph.\\n\\nSecond paragraph.', 'https://example.com/blog.jpg', '2026-09-17', '4 min read');
+    INSERT INTO travel_packages (id, destination, duration, description, starting_price, highlights, image_url, category)
+    VALUES ('db-package', 'DB Journey', '3 Days', 'DB package description', 'From INR 12,000', ARRAY['Highlight A', 'Highlight B'], 'https://example.com/package.jpg', 'international');
+    INSERT INTO visa_services (id, country, visa_type, processing_time, starting_from, image_url, documents)
+    VALUES ('db-visa', 'DB Country', 'Tourist Visa', '5 days', 'From INR 2,000', 'https://example.com/visa.jpg', ARRAY['Passport', 'Photo']);
+  `);
 
   originalPoolQuery = realPool.query;
   originalPoolConnect = realPool.connect;
@@ -110,6 +133,31 @@ test('platform-bound access tokens distinguish app and website sessions', () => 
   assert.equal(webClaims.platform, 'website');
   assert.equal(appClaims.sub, webClaims.sub);
   assert.equal(Number(appClaims.exp) - Number(appClaims.iat), 900);
+});
+
+test('content API maps blogs, packages, and visas from their dedicated tables', async () => {
+  const [blogsResponse, packagesResponse, visasResponse] = await Promise.all(
+    ['blog', 'package', 'visa'].map((type) => fetch(`${baseUrl}/api/content/${type}`)),
+  );
+  assert.equal(blogsResponse.status, 200);
+  assert.equal(packagesResponse.status, 200);
+  assert.equal(visasResponse.status, 200);
+
+  const blogs = await blogsResponse.json() as { items: Array<{ id: string; title: string; content: string[] }> };
+  const packages = await packagesResponse.json() as { items: Array<{ id: string; title: string; price: string; rating?: string }> };
+  const visas = await visasResponse.json() as { items: Array<{ code: string; name: string; documents: string[] }> };
+  assert.deepEqual(blogs.items[0], {
+    id: 'db-blog', category: 'Guide', title: 'Database blog', excerpt: 'DB excerpt',
+    image: 'https://example.com/blog.jpg', readingTime: '4 min read', date: 'Sep 17, 2026',
+    content: ['First paragraph.', 'Second paragraph.'],
+  });
+  assert.equal(packages.items[0].title, 'DB Journey');
+  assert.equal(packages.items[0].price, 'INR 12,000');
+  assert.equal(packages.items[0].rating, undefined);
+  assert.deepEqual(visas.items[0], {
+    code: 'db-visa', name: 'DB Country', image: 'https://example.com/visa.jpg',
+    visaTypes: ['Tourist Visa'], processing: '5 days', fee: 'From INR 2,000', documents: ['Passport', 'Photo'],
+  });
 });
 
 test('refresh tokens are represented by one-way hashes', () => {

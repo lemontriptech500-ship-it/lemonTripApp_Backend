@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { query } from '../db.js';
 
 const router = Router();
-const contentTypes = ['package', 'blog', 'visa'] as const;
+const contentTypes = ['package', 'blog', 'visa', 'service', 'destination', 'listing', 'hotel'] as const;
 type ContentType = typeof contentTypes[number];
 
 router.get('/:type', async (request, response, next) => {

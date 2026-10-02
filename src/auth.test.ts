@@ -51,9 +51,11 @@ before(async () => {
     created_at timestamptz NOT NULL DEFAULT now()
   )`);
   const migration = await readFile(new URL('../migrations/002_shared_auth.sql', import.meta.url), 'utf8');
+  const userPlatformMigration = await readFile(new URL('../migrations/005_user_platform.sql', import.meta.url), 'utf8');
   await database.exec('BEGIN');
   await database.exec(migration);
   await database.exec('COMMIT');
+  await database.exec(userPlatformMigration);
 
   originalPoolQuery = realPool.query;
   originalPoolConnect = realPool.connect;
@@ -156,6 +158,8 @@ test('email signup stays pending until its single-use verification link is redee
   assert.equal(signup.status, 202);
   assert.equal((await signup.json() as { verificationRequired: boolean }).verificationRequired, true);
   assert.ok(verificationToken);
+  const signupPlatform = await database.query<{ platform: string }>('SELECT platform FROM users WHERE email = $1', ['mira@example.com']);
+  assert.equal(signupPlatform.rows[0].platform, 'website');
 
   const blockedLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -176,17 +180,25 @@ test('email signup stays pending until its single-use verification link is redee
   });
   assert.equal(duplicateSignup.status, 202);
 
-  const [websiteLogin, appLogin] = await Promise.all(['website', 'app'].map((clientPlatform) => fetch(`${baseUrl}/api/auth/login`, {
+  const websiteLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'mira@example.com', password: 'test-password-123', platform: clientPlatform }),
-  })));
+    body: JSON.stringify({ email: 'mira@example.com', password: 'test-password-123', platform: 'website' }),
+  });
   assert.equal(websiteLogin.status, 200);
+  const websitePlatform = await database.query<{ platform: string }>('SELECT platform FROM users WHERE email = $1', ['mira@example.com']);
+  assert.equal(websitePlatform.rows[0].platform, 'website');
+  const appLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'mira@example.com', password: 'test-password-123', platform: 'app' }),
+  });
   assert.equal(appLogin.status, 200);
   const webSession = await websiteLogin.json() as { user: { id: string }; platform: string; accessToken: string; refreshToken?: string };
   let appSession = await appLogin.json() as { user: { id: string }; platform: string; accessToken: string; refreshToken: string };
   assert.equal(webSession.user.id, appSession.user.id);
   assert.equal(webSession.platform, 'website');
   assert.equal(appSession.platform, 'app');
+  const appPlatform = await database.query<{ platform: string }>('SELECT platform FROM users WHERE email = $1', ['mira@example.com']);
+  assert.equal(appPlatform.rows[0].platform, 'app');
   assert.equal(webSession.refreshToken, undefined);
   const browserCookie = websiteLogin.headers.get('set-cookie')?.match(/lemontrip_refresh=([^;]+)/)?.[1];
   assert.ok(browserCookie);
@@ -254,6 +266,8 @@ test('phone signup creates no account until OTP verification and returns no OTP'
   const session = await verified.json() as { user: { id: string; phoneVerified: boolean; email: string | null }; accessToken: string };
   assert.equal(session.user.phoneVerified, true);
   assert.equal(session.user.email, null);
+  const signupPlatform = await database.query<{ platform: string }>('SELECT platform FROM users WHERE phone = $1', [phone]);
+  assert.equal(signupPlatform.rows[0].platform, 'app');
   assert.equal((await fetch(`${baseUrl}/api/auth/me`, { headers: { Authorization: `Bearer ${session.accessToken}` } })).status, 200);
 });
 
@@ -340,6 +354,8 @@ test('Google signup, repeat login, and verified existing-account linking share o
   const secondSession = await googleLogin.json() as { user: { id: string }; platform: string };
   assert.equal(secondSession.user.id, firstSession.user.id);
   assert.equal(secondSession.platform, 'website');
+  const googlePlatform = await database.query<{ platform: string }>('SELECT platform FROM users WHERE email = $1', ['google@example.com']);
+  assert.equal(googlePlatform.rows[0].platform, 'website');
 
   const existing = await database.query<{ id: string }>(
     "INSERT INTO users (name, first_name, email, password_hash, email_verified, account_status) VALUES ('Existing Person', 'Existing', 'existing-google@example.com', 'hash', true, 'active') RETURNING id",

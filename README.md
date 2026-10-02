@@ -1,5 +1,7 @@
 # LemonTrip API
 
+The initial database setup creates and seeds the public travel content catalog. Run `npm run migrate` against the configured `DATABASE_URL` before starting the app. The app reads packages, blog posts, and visa assistance destinations from `GET /api/content/package`, `/api/content/blog`, and `/api/content/visa`.
+
 Local Node, Express, and PostgreSQL backend foundation for the LemonTrip mobile app and website clients.
 
 ## Setup

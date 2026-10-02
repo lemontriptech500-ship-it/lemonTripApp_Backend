@@ -335,8 +335,12 @@ router.post('/google', async (request, response, next) => {
        FROM oauth_accounts JOIN users ON users.id = oauth_accounts.user_id WHERE oauth_accounts.provider = 'google' AND oauth_accounts.provider_user_id = $1`, [identity.providerUserId])).rows[0];
         if (!user) {
             user = (await query('SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE lower(email) = $1', [identity.email])).rows[0];
-            if (user && !user.email_verified)
-                return response.status(409).json({ error: 'Verify this email using the existing sign-in method before linking Google.' });
+            if (user && !user.email_verified) {
+                const verified = await query(`UPDATE users SET email_verified = true, account_status = 'active', updated_at = now()
+           WHERE id = $1
+           RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`, [user.id]);
+                user = verified.rows[0];
+            }
             if (!user) {
                 user = (await query(`INSERT INTO users (name, first_name, last_name, email, password_hash, email_verified, account_status)
            VALUES ($1, $2, $3, $4, NULL, true, 'active')

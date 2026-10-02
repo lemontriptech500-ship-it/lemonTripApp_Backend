@@ -359,11 +359,14 @@ test('Google signup, repeat login, and verified existing-account linking share o
     "INSERT INTO users (name, first_name, email, password_hash, account_status) VALUES ('Unverified Person', 'Unverified', 'unverified-google@example.com', 'hash', 'active') RETURNING id",
   );
   const unverifiedToken = signedGoogleToken('google-subject-3', 'unverified-google@example.com');
-  const rejectedLink = await fetch(`${baseUrl}/api/auth/google`, {
+  const linkedUnverified = await fetch(`${baseUrl}/api/auth/google`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idToken: unverifiedToken, platform: 'app' }),
   });
-  assert.equal(rejectedLink.status, 409);
+  assert.equal(linkedUnverified.status, 200);
+  const verifiedSession = await linkedUnverified.json() as { user: { id: string; emailVerified: boolean } };
+  assert.equal(verifiedSession.user.id, unverified.rows[0].id);
+  assert.equal(verifiedSession.user.emailVerified, true);
   const links = await database.query<{ count: number }>("SELECT count(*)::int AS count FROM oauth_accounts WHERE user_id = $1", [unverified.rows[0].id]);
-  assert.equal(links.rows[0].count, 0);
+  assert.equal(links.rows[0].count, 1);
 });

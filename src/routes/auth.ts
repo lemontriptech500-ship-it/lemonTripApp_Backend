@@ -5,6 +5,7 @@ import { createAccessToken, createSession, hashOpaqueToken, hashPassword, refres
 import { normalizePhone, sendSmsOtp, sendVerificationEmail, verifyGoogleIdToken } from '../authProviders.js';
 import { env } from '../config.js';
 import { pool, query } from '../db.js';
+import { verifyFirebasePhoneToken } from '../firebaseAdmin.js';
 
 const router = Router();
 const windows = new Map<string, number[]>();
@@ -386,6 +387,56 @@ router.get('/me', requireAuth, async (request, response, next) => {
     if (!user) return response.status(401).json({ error: 'User account not found.' });
     return response.json({ user: publicUser(user), platform: request.user?.platform ?? 'app' });
   } catch (error) { return next(error); }
+});
+
+
+
+
+// 2) Paste this route just above: export { router as authRouter };
+router.post('/firebase/phone', async (request, response, next) => {
+  const parsed = z.object({
+    idToken: z.string().min(20).max(10_000),
+    purpose: z.enum(['signup', 'login']),
+    platform: platformSchema,
+    firstName: z.string().trim().min(1).max(80).optional(),
+    lastName: z.string().trim().max(80).optional(),
+    name: z.string().trim().min(2).max(100).optional(),
+    email: emailSchema.optional(),
+  }).refine((v) => v.purpose !== 'signup' || Boolean(v.firstName || v.name)).safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: 'Invalid phone sign-in request.' });
+  if (!rateAllowed(`firebase-phone:${request.ip}`, 20, 900_000)) return response.status(429).json({ error: 'Too many attempts. Try again later.' });
+  const clientPlatform = parsed.data.platform;
+ 
+  try {
+    const identity = await verifyFirebasePhoneToken(parsed.data.idToken);
+    const phone = normalizePhone(identity.phone);
+    const cols = 'id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status';
+    const found = await query<UserRow>(
+      `SELECT ${cols} FROM users WHERE regexp_replace(phone, '\\D', '', 'g') = regexp_replace($1, '\\D', '', 'g') LIMIT 1`,
+      [phone],
+    );
+    let user = found.rows[0];
+ 
+    if (parsed.data.purpose === 'login') {
+      if (!user || user.account_status !== 'active') return response.status(404).json({ error: 'No account found for this number. Create an account first.' });
+      await query('UPDATE users SET phone_verified = true, platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
+      user.phone_verified = true;
+    } else {
+      if (user) return response.status(409).json({ error: 'An account with this number already exists. Sign in instead.' });
+      const names = parseName(parsed.data.firstName, parsed.data.lastName, parsed.data.name);
+      user = (await query<UserRow>(
+        `INSERT INTO users (name, first_name, last_name, email, phone, password_hash, email_verified, phone_verified, account_status, platform)
+         VALUES ($1, $2, $3, $4, $5, NULL, false, true, 'active', $6) RETURNING ${cols}`,
+        [names.name, names.firstName, names.lastName, parsed.data.email ?? null, phone, clientPlatform],
+      )).rows[0];
+    }
+    return response.json(responseWithSession(response, user, clientPlatform, await createSession(user, clientPlatform, request)));
+  } catch (error: any) {
+    if (error?.message === 'FIREBASE_PROVIDER_NOT_CONFIGURED') return response.status(503).json({ error: 'Phone sign-in is not configured.' });
+    if (error?.code === '23505') return response.status(409).json({ error: 'An account with those details already exists.' });
+    if (error?.code?.startsWith?.('auth/') || error?.message === 'FIREBASE_NOT_PHONE_IDENTITY') return response.status(401).json({ error: 'Phone verification token is invalid or expired.' });
+    return next(error);
+  }
 });
 
 export { router as authRouter };

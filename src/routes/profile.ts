@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { requireAuth } from '../auth.js';
+import { hashPassword, requireAuth, verifyPassword } from '../auth.js';
 import { query } from '../db.js';
 
 const router = Router();
@@ -127,6 +127,51 @@ router.patch('/', async (request, response, next) => {
       [request.user?.id, ...keys.map((key) => updates[key])],
     );
     return response.json({ profile: serialize(result.rows[0]) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const passwordSchema = z.strictObject({
+  currentPassword: z.string().min(1).max(128).optional(),
+  newPassword: z.string().min(8).max(128),
+});
+
+// Change password. Accounts that signed up with Google or phone OTP have no password yet,
+// so they may set one without a current password. Everyone else must give the current one.
+// After a change, every OTHER logged-in device is signed out.
+router.post('/password', async (request, response, next) => {
+  const parsed = passwordSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return response.status(400).json({ error: 'Invalid password details.', issues: parsed.error.issues });
+  }
+  const { currentPassword, newPassword } = parsed.data;
+  try {
+    const found = await query<{ password_hash: string | null }>(
+      "SELECT password_hash FROM users WHERE id = $1 AND account_status = 'active'",
+      [request.user?.id],
+    );
+    const user = found.rows[0];
+    if (!user) return response.status(401).json({ error: 'User account not found.' });
+
+    if (user.password_hash) {
+      if (!currentPassword || !(await verifyPassword(currentPassword, user.password_hash))) {
+        return response.status(400).json({ error: 'Current password is incorrect.' });
+      }
+      if (await verifyPassword(newPassword, user.password_hash)) {
+        return response.status(400).json({ error: 'New password must be different from the current password.' });
+      }
+    }
+
+    await query('UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1', [
+      request.user?.id,
+      await hashPassword(newPassword),
+    ]);
+    const revoked = await query(
+      'UPDATE user_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL AND id IS DISTINCT FROM $2::uuid',
+      [request.user?.id, request.user?.sessionId ?? null],
+    );
+    return response.json({ success: true, otherSessionsLoggedOut: revoked.rowCount ?? 0 });
   } catch (error) {
     return next(error);
   }

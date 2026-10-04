@@ -6,6 +6,7 @@ import { authRouter } from './routes/auth.js';
 import { bookingsRouter } from './routes/bookings.js';
 import { chatRouter } from './routes/chat.js';
 import { contentRouter } from './routes/content.js';
+import { notificationsRouter } from './routes/notifications.js';
 import { profileRouter } from './routes/profile.js';
 
 export const app = express();
@@ -22,6 +23,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/bookings', bookingsRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/content', contentRouter);
+app.use('/api/notifications', notificationsRouter);
 app.use('/api/profile', profileRouter);
 
 app.use((_request, response) => {

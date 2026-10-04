@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { hashPassword, requireAuth, verifyPassword } from '../auth.js';
 import { query } from '../db.js';
+import { rateAllowed } from '../rateLimit.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -141,6 +142,9 @@ const passwordSchema = z.strictObject({
 // so they may set one without a current password. Everyone else must give the current one.
 // After a change, every OTHER logged-in device is signed out.
 router.post('/password', async (request, response, next) => {
+  if (!rateAllowed(`password:${request.user?.id}`, 5, 15 * 60 * 1000)) {
+    return response.status(429).json({ error: 'Too many password attempts. Try again later.' });
+  }
   const parsed = passwordSchema.safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ error: 'Invalid password details.', issues: parsed.error.issues });

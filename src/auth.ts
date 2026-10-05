@@ -64,17 +64,22 @@ export const requireAuth: RequestHandler = (request, response, next) => {
   if (!token) return response.status(401).json({ error: 'Authentication required' });
 
   try {
-    const payload = jwt.verify(token, env.JWT_SECRET);
-    if (typeof payload === 'string' || typeof payload.sub !== 'string') return response.status(401).json({ error: 'Invalid token' });
+    const verified = jwt.verify(token, env.JWT_SECRET);
+    if (typeof verified === 'string') return response.status(401).json({ error: 'Invalid token' });
+    const payload = verified;
+    // The website backend's legacy JWTs use `id`; the mobile auth service uses
+    // the standard `sub` claim. Both identify the same UUID in the shared DB.
+    const userId = typeof payload.sub === 'string' ? payload.sub : payload.id;
+    if (typeof userId !== 'string') return response.status(401).json({ error: 'Invalid token' });
     const sessionId = typeof payload.sid === 'string' ? payload.sid : undefined;
     const platform = payload.platform === 'app' || payload.platform === 'website' ? payload.platform : undefined;
     if (sessionId && !platform) return response.status(401).json({ error: 'Invalid token' });
     const continueRequest = async () => {
       if (sessionId) {
-        const session = await query<{ id: string }>('SELECT id FROM user_sessions WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > now()', [sessionId, payload.sub]);
+        const session = await query<{ id: string }>('SELECT id FROM user_sessions WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > now()', [sessionId, userId]);
         if (!session.rowCount) return response.status(401).json({ error: 'Session expired or revoked' });
       }
-      request.user = { id: payload.sub as string, email: null, name: '', phone: null, platform, sessionId };
+      request.user = { id: userId, email: typeof payload.email === 'string' ? payload.email : null, name: '', phone: null, platform, sessionId };
       return next();
     };
     void continueRequest().catch(next);
@@ -89,16 +94,19 @@ export const optionalAuth: RequestHandler = (request, _response, next) => {
   if (!token) return next();
 
   try {
-    const payload = jwt.verify(token, env.JWT_SECRET);
-    if (typeof payload !== 'string' && typeof payload.sub === 'string') {
+    const verified = jwt.verify(token, env.JWT_SECRET);
+    if (typeof verified === 'string') return next();
+    const payload = verified;
+    const userId = typeof payload.sub === 'string' ? payload.sub : payload.id;
+    if (typeof userId === 'string') {
       const sessionId = typeof payload.sid === 'string' ? payload.sid : undefined;
       const platform = payload.platform === 'app' || payload.platform === 'website' ? payload.platform : undefined;
       const continueRequest = async () => {
         if (sessionId) {
-          const session = await query<{ id: string }>('SELECT id FROM user_sessions WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > now()', [sessionId, payload.sub]);
+          const session = await query<{ id: string }>('SELECT id FROM user_sessions WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > now()', [sessionId, userId]);
           if (!session.rowCount) return next();
         }
-        request.user = { id: payload.sub as string, email: null, name: '', phone: null, platform, sessionId };
+        request.user = { id: userId, email: typeof payload.email === 'string' ? payload.email : null, name: '', phone: null, platform, sessionId };
         return next();
       };
       void continueRequest().catch(next);

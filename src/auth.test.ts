@@ -60,7 +60,8 @@ before(async () => {
     CREATE TABLE blog_posts (
       id varchar PRIMARY KEY, category varchar NOT NULL, title varchar NOT NULL,
       excerpt text NOT NULL, content text NOT NULL, image_url text,
-      published_at date, read_time varchar, created_at timestamptz NOT NULL DEFAULT now()
+      published_at date, read_time varchar, created_at timestamptz NOT NULL DEFAULT now(),
+      publication_status varchar NOT NULL DEFAULT 'published'
     );
     CREATE TABLE travel_packages (
       id varchar PRIMARY KEY, destination varchar NOT NULL, duration varchar NOT NULL,
@@ -74,6 +75,8 @@ before(async () => {
     );
     INSERT INTO blog_posts (id, category, title, excerpt, content, image_url, published_at, read_time)
     VALUES ('db-blog', 'Guide', 'Database blog', 'DB excerpt', E'First paragraph.\\n\\nSecond paragraph.', 'https://example.com/blog.jpg', '2026-09-17', '4 min read');
+    INSERT INTO blog_posts (id, category, title, excerpt, content, image_url, published_at, read_time, publication_status)
+    VALUES ('db-draft', 'Guide', 'Draft blog', 'Draft excerpt', 'Draft content', NULL, '2026-09-18', '1 min read', 'draft');
     INSERT INTO travel_packages (id, destination, duration, description, starting_price, highlights, image_url, category)
     VALUES ('db-package', 'DB Journey', '3 Days', 'DB package description', 'From INR 12,000', ARRAY['Highlight A', 'Highlight B'], 'https://example.com/package.jpg', 'international');
     INSERT INTO visa_services (id, country, visa_type, processing_time, starting_from, image_url, documents)
@@ -135,6 +138,19 @@ test('platform-bound access tokens distinguish app and website sessions', () => 
   assert.equal(Number(appClaims.exp) - Number(appClaims.iat), 900);
 });
 
+test('mobile authentication accepts a website legacy id claim for the same UUID user', async () => {
+  const id = '00000000-0000-4000-8000-000000000099';
+  await database.query(
+    "INSERT INTO users (id, name, first_name, email, password_hash, email_verified, account_status) VALUES ($1, 'Shared User', 'Shared', 'shared-claim@example.com', 'hash', true, 'active')",
+    [id],
+  );
+  const websiteStyleToken = jwt.sign({ id, email: 'shared-claim@example.com' }, env.JWT_SECRET, { expiresIn: '7d' });
+  const response = await fetch(`${baseUrl}/api/auth/me`, { headers: { Authorization: `Bearer ${websiteStyleToken}` } });
+  assert.equal(response.status, 200);
+  const result = await response.json() as { user: { id: string } };
+  assert.equal(result.user.id, id);
+});
+
 test('content API maps blogs, packages, and visas from their dedicated tables', async () => {
   const [blogsResponse, packagesResponse, visasResponse] = await Promise.all(
     ['blog', 'package', 'visa'].map((type) => fetch(`${baseUrl}/api/content/${type}`)),
@@ -151,12 +167,29 @@ test('content API maps blogs, packages, and visas from their dedicated tables', 
     image: 'https://example.com/blog.jpg', readingTime: '4 min read', date: 'Sep 17, 2026',
     content: ['First paragraph.', 'Second paragraph.'],
   });
+  assert.deepEqual(blogs.items.map((post) => post.id), ['db-blog']);
   assert.equal(packages.items[0].title, 'DB Journey');
   assert.equal(packages.items[0].price, 'INR 12,000');
   assert.equal(packages.items[0].rating, undefined);
   assert.deepEqual(visas.items[0], {
-    code: 'db-visa', name: 'DB Country', image: 'https://example.com/visa.jpg',
-    visaTypes: ['Tourist Visa'], processing: '5 days', fee: 'From INR 2,000', documents: ['Passport', 'Photo'],
+    id: 'db-visa', code: 'db-visa', name: 'DB Country', image: 'https://example.com/visa.jpg',
+    visaType: 'Tourist Visa', processing: '5 days', fee: 'INR 2,000', documents: ['Passport', 'Photo'],
+  });
+});
+
+test('public mobile blog content rejects direct draft-id and slug paths', async () => {
+  const draftId = await fetch(`${baseUrl}/api/content/blog/db-draft`);
+  const draftSlug = await fetch(`${baseUrl}/api/content/blog/draft-blog-post`);
+  assert.equal(draftId.status, 404);
+  assert.equal(draftSlug.status, 404);
+});
+
+test('public mobile blog endpoint reports an unavailable publication schema clearly', async () => {
+  await database.exec('ALTER TABLE blog_posts DROP COLUMN publication_status');
+  const response = await fetch(`${baseUrl}/api/content/blog`);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    error: 'Blog publication schema is unavailable. Apply the reviewed blog publication migration before serving public blog content.',
   });
 });
 

@@ -137,6 +137,7 @@ router.post('/login', async (request, response, next) => {
   if (!rateAllowed(`login:${request.ip}`, 20, 900_000)) return response.status(429).json({ error: 'Too many login attempts. Try again later.' });
   const parsed = z.object({ email: emailSchema, password: z.string().min(1).max(128), platform: platformSchema }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: 'Invalid login details.' });
+  if (!rateAllowed(`login-email:${parsed.data.email}`, 10, 900_000)) return response.status(429).json({ error: 'Too many login attempts. Try again later.' });
   const clientPlatform = platform(parsed.data.platform);
   if (!clientPlatform) return response.status(400).json({ error: 'Platform must be app or website.' });
   try {

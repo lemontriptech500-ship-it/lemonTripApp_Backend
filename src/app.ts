@@ -12,6 +12,7 @@ import { passwordResetRouter } from './routes/passwordReset.js';
 import { profileRouter } from './routes/profile.js';
 
 export const app = express();
+if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY));
 
 app.use(helmet({ crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' } }));
 app.use(cors({ origin: env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean), credentials: true }));

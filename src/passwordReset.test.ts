@@ -157,3 +157,15 @@ test('pending and disabled accounts get no reset link', async () => {
   await post('/api/auth/forgot-password', { email: 'reset-disabled@example.com' });
   assert.equal(resetToken, '');
 });
+
+test('login is limited per email after 10 attempts', async () => {
+  const body = { email: 'ratelimit-test@example.com', password: 'WrongPassword1' };
+  for (let i = 0; i < 10; i++) {
+    const attempt = await post('/api/auth/login', body);
+    assert.equal(attempt.status, 401);
+  }
+  const blocked = await post('/api/auth/login', body);
+  assert.equal(blocked.status, 429);
+  const other = await post('/api/auth/login', { email: 'ratelimit-other@example.com', password: 'WrongPassword1' });
+  assert.equal(other.status, 401);
+});

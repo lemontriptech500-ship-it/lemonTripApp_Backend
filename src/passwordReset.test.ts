@@ -18,7 +18,7 @@ let originalPoolConnect: () => unknown;
 
 async function run(text: string, values?: unknown[]) {
   const result = await database.query(text, values);
-  return { ...result, rowCount: result.affectedRows ?? result.rows.length };
+  return { ...result, rowCount: result.rows.length || (result.affectedRows ?? 0) };
 }
 
 async function post(path: string, body: unknown) {

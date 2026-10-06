@@ -3,6 +3,7 @@ import express from 'express';
 import helmet from 'helmet';
 import { env } from './config.js';
 import { authRouter } from './routes/auth.js';
+import { bookingCancelRouter } from './routes/bookingCancel.js';
 import { bookingsRouter } from './routes/bookings.js';
 import { chatRouter } from './routes/chat.js';
 import { contentRouter } from './routes/content.js';
@@ -23,6 +24,7 @@ app.get('/health', (_request, response) => {
 app.use('/api/auth', authRouter);
 app.use('/api/auth', passwordResetRouter);
 app.use('/api/bookings', bookingsRouter);
+app.use('/api/bookings', bookingCancelRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/content', contentRouter);
 app.use('/api/notifications', notificationsRouter);

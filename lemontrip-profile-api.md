@@ -88,3 +88,5 @@ Body: { "currentPassword": "optional", "newPassword": "min 8, max 128 characters
 
 - 429 { error: "Too many password attempts. Try again later." }
 
+
+Note for POST /api/profile/password: if the account already has a password, currentPassword is required. If the account has no password yet (for example it was created with Google or phone), currentPassword is not needed and the new password is set directly.

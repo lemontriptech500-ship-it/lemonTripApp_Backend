@@ -2,15 +2,17 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
+import { pathToFileURL } from 'node:url';
+const websiteRoot = process.env.WEBSITE_BACKEND_DIR ? new URL(pathToFileURL(process.env.WEBSITE_BACKEND_DIR).href + '/') : new URL('../../../website/backendLemonTrip/', import.meta.url);
 
 const migration = await readFile(new URL('../migrations/002_shared_auth.sql', import.meta.url), 'utf8');
 const catalogMigration = await readFile(new URL('../migrations/003_catalog_content.sql', import.meta.url), 'utf8');
 const dynamicCatalogMigration = await readFile(new URL('../migrations/004_dynamic_catalog.sql', import.meta.url), 'utf8');
 const userPlatformMigration = await readFile(new URL('../migrations/005_user_platform.sql', import.meta.url), 'utf8');
 const sharedCompatibilityMigration = await readFile(new URL('../migrations/006_shared_website_catalog_auth.sql', import.meta.url), 'utf8');
-const websiteVisaApplicationMigration = await readFile(new URL('../../../website/backendLemonTrip/db/migrations/003_visa_applications.sql', import.meta.url), 'utf8');
-const websiteSchema = await readFile(new URL('../../../website/backendLemonTrip/db/schema.sql', import.meta.url), 'utf8');
-const websiteCatalogMigrations = await Promise.all(['001_catalog_tables.sql', '002_catalog_indexes.sql', '003_visa_applications.sql', '004_contact_message_resolved.sql', '005_blog_publication_status.sql'].map((file) => readFile(new URL(`../../../website/backendLemonTrip/db/migrations/${file}`, import.meta.url), 'utf8')));
+const websiteVisaApplicationMigration = await readFile(new URL('db/migrations/003_visa_applications.sql', websiteRoot), 'utf8');
+const websiteSchema = await readFile(new URL('db/schema.sql', websiteRoot), 'utf8');
+const websiteCatalogMigrations = await Promise.all(['001_catalog_tables.sql', '002_catalog_indexes.sql', '003_visa_applications.sql', '004_contact_message_resolved.sql', '005_blog_publication_status.sql'].map((file) => readFile(new URL(`db/migrations/${file}`, websiteRoot), 'utf8')));
 const mobileMigrations = await Promise.all(['001_initial.sql', '002_shared_auth.sql', '003_catalog_content.sql', '004_dynamic_catalog.sql', '005_user_platform.sql', '006_shared_website_catalog_auth.sql'].map((file) => readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')));
 const legacySchema = `
   CREATE TABLE users (

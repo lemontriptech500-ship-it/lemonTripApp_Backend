@@ -1,4 +1,4 @@
--- 006_notifications_profile.sql
+-- 009_notifications_profile.sql
 -- Additive only: nothing is dropped or renamed, existing data is kept.
 
 -- 1) User profile fields + notification preferences

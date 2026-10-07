@@ -50,7 +50,7 @@ before(async () => {
   )`);
   const sharedAuth = await readFile(new URL('../migrations/002_shared_auth.sql', import.meta.url), 'utf8');
   const userPlatform = await readFile(new URL('../migrations/005_user_platform.sql', import.meta.url), 'utf8');
-  const passwordReset = await readFile(new URL('../migrations/009_password_reset.sql', import.meta.url), 'utf8');
+  const passwordReset = await readFile(new URL('../migrations/011_password_reset.sql', import.meta.url), 'utf8');
   await database.exec('BEGIN');
   await database.exec(sharedAuth);
   await database.exec('COMMIT');

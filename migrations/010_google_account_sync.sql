@@ -1,4 +1,4 @@
--- 008_google_account_sync.sql
+-- 010_google_account_sync.sql
 -- Keeps Google accounts in sync: website users.google_id and app oauth_accounts.
 -- Additive only: nothing is dropped or renamed.
 CREATE OR REPLACE FUNCTION users_mark_google_verified() RETURNS trigger AS $$

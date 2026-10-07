@@ -28,3 +28,5 @@ Proposal, needs a decision from Manpreet: renumber mine after the production vis
 
 My own runner uses the ledger table lemontrip_mobile_schema_migrations. Production uses schema_migrations. So my runner must not be used on production.
 
+
+Update 7 Oct: renamed my files to 009_notifications_profile, 010_google_account_sync and 011_password_reset to avoid the clash with the production visa files. The list above shows the old names.

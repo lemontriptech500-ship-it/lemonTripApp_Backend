@@ -20,7 +20,7 @@ router.get('/:type', async (request, response, next) => {
         published_at: string | Date | null;
         read_time: string | null;
       }>(
-        'SELECT id, category, title, excerpt, content, image_url, published_at, read_time FROM blog_posts ORDER BY published_at DESC NULLS LAST, created_at DESC',
+        "SELECT id, category, title, excerpt, content, image_url, published_at, read_time FROM blog_posts WHERE publication_status = 'published' ORDER BY published_at DESC NULLS LAST, created_at DESC",
       );
       return response.json({ items: result.rows.map((row) => ({
         id: row.id,
@@ -73,12 +73,13 @@ router.get('/:type', async (request, response, next) => {
         'SELECT id, country, visa_type, processing_time, starting_from, image_url, documents FROM visa_services ORDER BY country, visa_type',
       );
       return response.json({ items: result.rows.map((row) => ({
+        id: row.id,
         code: row.id,
         name: row.country,
         image: row.image_url ?? '',
-        visaTypes: [row.visa_type],
+        visaType: row.visa_type,
         processing: row.processing_time ?? '',
-        ...(row.starting_from ? { fee: row.starting_from } : {}),
+        ...(row.starting_from ? { fee: row.starting_from.replace(/^from\s+/i, '') } : {}),
         ...(row.documents?.length ? { documents: row.documents } : {}),
       })) });
     }
@@ -88,8 +89,19 @@ router.get('/:type', async (request, response, next) => {
     );
     return response.json({ items: result.rows.map((row) => row.data) });
   } catch (error) {
+    if (type === 'blog' && isMissingBlogPublicationSchema(error)) {
+      return response.status(503).json({
+        error: 'Blog publication schema is unavailable. Apply the reviewed blog publication migration before serving public blog content.',
+      });
+    }
     return next(error);
   }
 });
+
+function isMissingBlogPublicationSchema(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error)) return false;
+  const code = error.code;
+  return code === '42703' || code === '42P01';
+}
 
 export { router as contentRouter };

@@ -98,9 +98,9 @@ const register = async (request, response, next) => {
         return response.status(400).json({ error: 'Enter a valid phone number.' });
     }
     try {
-        const created = await query(`INSERT INTO users (name, first_name, last_name, email, phone, password_hash, email_verified, phone_verified, account_status)
-       VALUES ($1, $2, $3, $4, $5, $6, false, false, 'pending')
-       RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`, [names.name, names.firstName, names.lastName, parsed.data.email, phone, await hashPassword(parsed.data.password)]);
+        const created = await query(`INSERT INTO users (name, first_name, last_name, email, phone, password_hash, email_verified, phone_verified, account_status, platform)
+       VALUES ($1, $2, $3, $4, $5, $6, false, false, 'pending', $7)
+       RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`, [names.name, names.firstName, names.lastName, parsed.data.email, phone, await hashPassword(parsed.data.password), clientPlatform]);
         try {
             await storeAndSendEmailVerification(created.rows[0], clientPlatform);
         }
@@ -136,6 +136,7 @@ router.post('/login', async (request, response, next) => {
             return response.status(403).json({ error: 'This account is unavailable. Contact support.' });
         if (user.account_status === 'pending')
             return response.status(403).json({ error: 'Verify your email before signing in.' });
+        await query('UPDATE users SET platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
         return response.json(responseWithSession(response, user, clientPlatform, await createSession(user, clientPlatform, request)));
     }
     catch (error) {
@@ -244,9 +245,9 @@ router.post('/otp/verify', async (request, response, next) => {
                 await client.query('ROLLBACK');
                 return response.status(400).json({ error: 'This signup could not be completed. Start again.' });
             }
-            const inserted = await client.query(`INSERT INTO users (name, first_name, last_name, email, phone, password_hash, email_verified, phone_verified, account_status)
-         VALUES ($1, $2, $3, $4, $5, $6, false, true, 'active')
-         RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`, [data.name, data.firstName, data.lastName ?? null, data.email ?? null, phone, null]);
+            const inserted = await client.query(`INSERT INTO users (name, first_name, last_name, email, phone, password_hash, email_verified, phone_verified, account_status, platform)
+         VALUES ($1, $2, $3, $4, $5, $6, false, true, 'active', $7)
+         RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`, [data.name, data.firstName, data.lastName ?? null, data.email ?? null, phone, null, clientPlatform]);
             user = inserted.rows[0];
         }
         else {
@@ -256,7 +257,7 @@ router.post('/otp/verify', async (request, response, next) => {
                 await client.query('ROLLBACK');
                 return response.status(400).json({ error: 'The code is invalid or expired. Request a new code.' });
             }
-            await client.query('UPDATE users SET phone_verified = true, updated_at = now() WHERE id = $1', [user.id]);
+            await client.query('UPDATE users SET phone_verified = true, platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
             user.phone_verified = true;
         }
         await client.query('COMMIT');
@@ -342,14 +343,15 @@ router.post('/google', async (request, response, next) => {
                 user = verified.rows[0];
             }
             if (!user) {
-                user = (await query(`INSERT INTO users (name, first_name, last_name, email, password_hash, email_verified, account_status)
-           VALUES ($1, $2, $3, $4, NULL, true, 'active')
-           RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`, [identity.name, identity.firstName, identity.lastName, identity.email])).rows[0];
+                user = (await query(`INSERT INTO users (name, first_name, last_name, email, password_hash, email_verified, account_status, platform)
+           VALUES ($1, $2, $3, $4, NULL, true, 'active', $5)
+           RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`, [identity.name, identity.firstName, identity.lastName, identity.email, clientPlatform])).rows[0];
             }
             await query("INSERT INTO oauth_accounts (user_id, provider, provider_user_id, provider_email, linked_from_platform) VALUES ($1, 'google', $2, $3, $4) ON CONFLICT (provider, provider_user_id) DO NOTHING", [user.id, identity.providerUserId, identity.email, clientPlatform]);
         }
         if (user.account_status !== 'active')
             return response.status(403).json({ error: 'This account is unavailable. Verify your email or contact support.' });
+        await query('UPDATE users SET platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
         return response.json(responseWithSession(response, user, clientPlatform, await createSession(user, clientPlatform, request)));
     }
     catch (error) {

@@ -1,6 +1,6 @@
 # LemonTrip API
 
-The initial database setup creates and seeds the public travel content catalog. Run `npm run migrate` against the configured `DATABASE_URL` before starting the app. The app reads packages, blog posts, and visa assistance destinations from `GET /api/content/package`, `/api/content/blog`, and `/api/content/visa`.
+The API reads package, blog, and visa records from the shared `travel_packages`, `blog_posts`, and `visa_services` tables. It maps those rows to the mobile content contract at `GET /api/content/package`, `/api/content/blog`, and `/api/content/visa`. Migration `006` creates those tables on a fresh database without inserting sample catalog records. Older `content_items` sample rows from migrations `003` and `004` are separate legacy content and remain inactive.
 
 Local Node, Express, and PostgreSQL backend foundation for the LemonTrip mobile app and website clients.
 
@@ -34,15 +34,23 @@ Auth requests may include `platform: "app"` or `platform: "website"`; omitted va
 
 ## Migrations
 
-Numbered SQL migrations are recorded in `schema_migrations`, serialized with a PostgreSQL advisory lock, and applied transactionally. `002_shared_auth.sql` is additive and preserves existing users and bookings. It stops if existing phone numbers collide after digit normalization; review and resolve those rows before retrying. No historical platform is inferred or assigned.
+Numbered SQL migrations are recorded in the backend-specific `lemontrip_mobile_schema_migrations` table, serialized with the shared LemonTrip migration advisory lock, and applied transactionally. Because these files affect the shared database, the runner stops unless the team has approved a shared-schema migration strategy and the operator explicitly passes `--shared-schema-strategy-approved`. If this backend migration history is already recorded in the former shared `schema_migrations` table, the runner carries those exact applied records into its namespaced ledger. If public tables already exist without recorded mobile migrations, the runner also requires `--allow-existing-schema-reviewed` after reviewing the schema and migration effects. This second flag is not a baseline: unapplied SQL migrations will run.
+
+`002_shared_auth.sql` is additive and preserves existing users and bookings. It stops if existing phone numbers collide after digit normalization; review and resolve those rows before retrying. `005_user_platform.sql` assigns `website` only when recorded auth history identifies it and otherwise defaults historical users to `app`. `006_shared_website_catalog_auth.sql` adds the shared catalog tables and keeps website `name` inserts compatible with the mobile `first_name` constraint.
 
 Locally, from `LemonTrip_Mobile_app_backend`:
 
 ```sh
-npm run migrate
+npm run migrate -- --shared-schema-strategy-approved
 ```
 
-For Render, set the build command to `npm ci && npm run build`, the pre-deploy command to `npm run migrate`, and the start command to `npm start`. Configure provider variables in Render first and take a database backup before deploying. The pre-deploy migration runs before the new service release. Do not run migrations from the mobile app.
+When intentionally applying this backend to a database already initialized by the website backend, first review the current schema, migration SQL, and a backup. Then pass the explicit review flag:
+
+```sh
+npm run migrate -- --shared-schema-strategy-approved --allow-existing-schema-reviewed
+```
+
+For Render, set the build command to `npm ci && npm run build` and the start command to `npm start`. Configure provider variables in Render first. Do not configure an automatic pre-deploy migration for an existing shared production database until the shared strategy and each migration have been reviewed and approved for that release. If approved, use `npm run migrate -- --shared-schema-strategy-approved --allow-existing-schema-reviewed` as the pre-deploy command. Do not run migrations from the mobile app.
 
 ## Mobile Client
 

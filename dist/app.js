@@ -7,7 +7,7 @@ import { bookingsRouter } from './routes/bookings.js';
 import { chatRouter } from './routes/chat.js';
 import { contentRouter } from './routes/content.js';
 export const app = express();
-app.use(helmet());
+app.use(helmet({ crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' } }));
 app.use(cors({ origin: env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean), credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.get('/health', (_request, response) => {

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../auth.js';
 import { query } from '../db.js';
+import { notifyBookingCreated } from '../notifications.js';
 
 const router = Router();
 const bookingSchema = z.object({ serviceName: z.string().min(1).max(100), itemName: z.string().min(1).max(300), price: z.string().min(1).max(50), tripDate: z.string().date().optional(), providerReference: z.string().max(200).optional() });
@@ -41,6 +42,7 @@ router.post('/', async (request, response, next) => {
   try {
     const input = normalizeBookingInput(request.body);
     const result = await query<BookingRow>('INSERT INTO bookings (user_id, service_name, item_name, price, trip_date, payment_status, provider_reference, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, service_name, item_name, price, trip_date, status, payment_status, provider_reference, created_at', [request.user?.id, input.serviceName, input.itemName, input.price, input.tripDate ?? null, input.paymentStatus, input.providerReference ?? null, input.status]);
+    await notifyBookingCreated(request.user?.id, result.rows[0]);
     return response.status(201).json({ booking: serialize(result.rows[0]) });
   } catch (error: any) {
     if (error?.name === 'ZodError') return response.status(400).json({ error: 'Invalid booking details', issues: error.issues });

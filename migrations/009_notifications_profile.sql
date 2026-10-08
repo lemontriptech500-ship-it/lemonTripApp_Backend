@@ -1,4 +1,4 @@
--- 006_notifications_profile.sql
+-- 009_notifications_profile.sql
 -- Additive only: nothing is dropped or renamed, existing data is kept.
 
 -- 1) User profile fields + notification preferences
@@ -60,14 +60,14 @@ ALTER TABLE bookings
   ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'INR',
   ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 
--- Backfill amount only where the old text is a plain number like '₹24,999' or '24999.50'
+-- Backfill amount from the first number in the old price text, for example 'Rs. 24,999' or '24999.50'
 UPDATE bookings
-SET amount = replace(regexp_replace(price, '[^0-9.,]', '', 'g'), ',', '')::numeric
+SET amount = replace(substring(price from '[0-9][0-9,]*(?:[.][0-9]{1,2})?'), ',', '')::numeric
 WHERE amount IS NULL
-  AND price ~ '^\D*[0-9][0-9,]*(\.[0-9]{1,2})?\D*$';
+  AND price ~ '[0-9]';
 
 -- Keep updated_at current on every change
-CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION lemontrip_set_updated_at() RETURNS trigger AS $$
 BEGIN
   NEW.updated_at = now();
   RETURN NEW;
@@ -77,9 +77,9 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS bookings_set_updated_at ON bookings;
 CREATE TRIGGER bookings_set_updated_at
   BEFORE UPDATE ON bookings
-  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION lemontrip_set_updated_at();
 
 DROP TRIGGER IF EXISTS device_tokens_set_updated_at ON device_tokens;
 CREATE TRIGGER device_tokens_set_updated_at
   BEFORE UPDATE ON device_tokens
-  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION lemontrip_set_updated_at();

@@ -288,7 +288,7 @@ router.post('/email/send', async (request, response, next) => {
 });
 
 router.post('/google', async (request, response, next) => {
-  const parsed = z.object({ idToken: z.string().min(20).max(10_000), platform: platformSchema }).safeParse(request.body);
+  const parsed = z.object({ idToken: z.string().min(20).max(10_000), platform: platformSchema, mode: z.enum(['login', 'signup']).default('signup') }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: 'Invalid Google sign-in request.' });
   const clientPlatform = platform(parsed.data.platform);
   if (!clientPlatform) return response.status(400).json({ error: 'Platform must be app or website.' });
@@ -310,6 +310,10 @@ router.post('/google', async (request, response, next) => {
           [user.id],
         );
         user = verified.rows[0];
+      }
+      // Login never creates an account: only an explicit signup may create a new Google user.
+      if (!user && parsed.data.mode === 'login') {
+        return response.status(404).json({ error: 'No LemonTrip account found for this Google account. Please sign up first.', code: 'GOOGLE_ACCOUNT_NOT_FOUND' });
       }
       if (!user) {
         user = (await query<UserRow>(

@@ -413,6 +413,36 @@ test('OTP resend cap is enforced and normalized duplicate phones are not re-regi
   assert.equal(duplicate.status, 202);
 });
 
+test('Google login with mode=login never creates an account; signup creates it with platform=app', async () => {
+  nock('https://www.googleapis.com')
+    .get('/oauth2/v1/certs')
+    .reply(200, { 'lemontrip-test-key': googleCertificate }, { 'Cache-Control': 'public, max-age=3600' });
+
+  const token = signedGoogleToken('google-subject-login-only', 'login-only@example.com');
+  const denied = await fetch(`${baseUrl}/api/auth/google`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken: token, platform: 'app', mode: 'login' }),
+  });
+  assert.equal(denied.status, 404);
+  assert.equal(((await denied.json()) as { code: string }).code, 'GOOGLE_ACCOUNT_NOT_FOUND');
+  const none = await database.query<{ count: number }>('SELECT count(*)::int AS count FROM users WHERE email = $1', ['login-only@example.com']);
+  assert.equal(none.rows[0].count, 0);
+
+  const created = await fetch(`${baseUrl}/api/auth/google`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken: token, platform: 'app', mode: 'signup' }),
+  });
+  assert.equal(created.status, 200);
+  const row = await database.query<{ platform: string }>('SELECT platform FROM users WHERE email = $1', ['login-only@example.com']);
+  assert.equal(row.rows[0].platform, 'app');
+
+  const allowed = await fetch(`${baseUrl}/api/auth/google`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken: token, platform: 'app', mode: 'login' }),
+  });
+  assert.equal(allowed.status, 200);
+});
+
 test('Google signup, repeat login, and verified existing-account linking share one user', async () => {
   nock('https://www.googleapis.com')
     .get('/oauth2/v1/certs')

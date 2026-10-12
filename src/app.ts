@@ -10,6 +10,7 @@ import { contentRouter } from './routes/content.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { passwordResetRouter } from './routes/passwordReset.js';
 import { profileRouter } from './routes/profile.js';
+import { walletRouter } from './routes/wallet.js';
 
 export const app = express();
 if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY));
@@ -30,6 +31,7 @@ app.use('/api/chat', chatRouter);
 app.use('/api/content', contentRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/profile', profileRouter);
+app.use('/api/wallet', walletRouter);
 
 app.use((_request, response) => {
   response.status(404).json({ error: 'Route not found' });

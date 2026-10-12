@@ -67,3 +67,6 @@ export async function verifyGoogleIdToken(idToken: string) {
     lastName: payload.family_name?.trim() || null,
   };
 }
+
+
+

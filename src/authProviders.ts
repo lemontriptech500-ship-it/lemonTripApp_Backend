@@ -53,7 +53,10 @@ export async function verifyGoogleIdToken(idToken: string) {
     .map((value) => value.trim());
   if (!audiences.length) throw new Error('GOOGLE_PROVIDER_NOT_CONFIGURED');
 
-  const ticket = await googleClient.verifyIdToken({ idToken, audience: audiences });
+  const ticket = await Promise.race([
+    googleClient.verifyIdToken({ idToken, audience: audiences }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Invalid token: Google verification timed out')), 10_000)),
+  ]);
   const payload = ticket.getPayload();
   if (!payload?.sub || !payload.email || payload.email_verified !== true) throw new Error('GOOGLE_IDENTITY_NOT_VERIFIED');
   return {

@@ -297,6 +297,9 @@ router.post('/google', async (request, response, next) => {
     const identity = await verifyGoogleIdToken(parsed.data.idToken);
     // The website already stores Google accounts on users (google_id / provider), so log in from that row.
     let user = (await query<UserRow>('SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE google_id = $1 OR lower(email) = $2 ORDER BY (google_id = $1) DESC NULLS LAST LIMIT 1', [identity.providerUserId, identity.email])).rows[0];
+    if (user && parsed.data.mode === 'signup') {
+      return response.status(409).json({ error: 'You already have an account with this Google account. Please log in to continue.', code: 'GOOGLE_ACCOUNT_EXISTS' });
+    }
     if (!user && parsed.data.mode === 'login') {
       return response.status(404).json({ error: 'No LemonTrip account found for this Google account. Please sign up first.', code: 'GOOGLE_ACCOUNT_NOT_FOUND' });
     }

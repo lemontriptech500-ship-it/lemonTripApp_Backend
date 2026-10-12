@@ -301,7 +301,10 @@ router.post('/google', async (request, response, next) => {
       [identity.providerUserId],
     )).rows[0];
     if (!user) {
-      user = (await query<UserRow>('SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE lower(email) = $1', [identity.email])).rows[0];
+      // Accounts created by Google sign-up on the website store the Google subject in users.google_id,
+      // so match on it (then on email) before ever treating this as a new account.
+      user = (await query<UserRow>('SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE google_id = $1', [identity.providerUserId])).rows[0]
+        ?? (await query<UserRow>('SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE lower(email) = $1', [identity.email])).rows[0];
       if (user && !user.email_verified) {
         const verified = await query<UserRow>(
           `UPDATE users SET email_verified = true, account_status = 'active', updated_at = now()

@@ -18,6 +18,11 @@ export const app = express();
 if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY));
 
 app.use(helmet({ crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' } }));
+// The app's email reset form is hosted on the website, but uses this API.
+app.use('/api/auth/reset-password', cors({ origin: [
+  'https://lemontrip.in', 'https://www.lemontrip.in',
+  ...env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean),
+] }));
 app.use(cors({ origin: env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean), credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 

@@ -12,8 +12,14 @@ const emailSchema = z.string().trim().email().max(254).transform((value) => valu
 // Sends the reset link by email. If no email provider is set up, the link is printed
 // to the server console in development only, so the flow can be tested without email.
 async function sendPasswordResetEmail(email: string, firstName: string, token: string) {
-  const base = process.env.PASSWORD_RESET_URL?.trim() || 'https://lemontrip.in/reset-password';
-  const resetUrl = `${base}${base.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+  const base = process.env.APP_PASSWORD_RESET_URL?.trim() || process.env.PASSWORD_RESET_URL?.trim() || 'https://lemontrip.in/app/reset-password';
+  const link = new URL(base);
+  // Migrate the old website route even when it is still configured on the host.
+  if (['http:', 'https:'].includes(link.protocol) && /^\/reset-password\/?$/.test(link.pathname)) {
+    link.pathname = '/app/reset-password';
+  }
+  link.searchParams.set('token', token);
+  const resetUrl = link.toString();
   if (env.EMAIL_PROVIDER !== 'resend' || !env.EMAIL_API_KEY || !env.EMAIL_FROM) {
     if (process.env.NODE_ENV === 'production') throw new Error('EMAIL_PROVIDER_NOT_CONFIGURED');
     console.log(`[DEV] Password reset link for ${email}: ${resetUrl}`);
@@ -27,7 +33,7 @@ async function sendPasswordResetEmail(email: string, firstName: string, token: s
       from: env.EMAIL_FROM,
       to: [email],
       subject: 'Reset your LemonTrip password',
-      html: `<p>Hello ${safeName},</p><p>Use this link to reset your LemonTrip password:</p><p><a href="${resetUrl}">Reset password</a></p><p>This link expires in 30 minutes and can only be used once. If you did not ask for this, you can ignore this email.</p>`,
+      html: `<p>Hello ${safeName},</p><p>Use this link to reset your LemonTrip app password:</p><p><a href="${resetUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">Reset app password</a></p><p>You can also paste this reset code into the app: <code>${token}</code></p><p>This link expires in 30 minutes and can only be used once. If you did not ask for this, you can ignore this email.</p>`,
     }),
     signal: AbortSignal.timeout(10_000),
   });

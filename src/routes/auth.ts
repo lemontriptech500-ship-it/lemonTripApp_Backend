@@ -461,7 +461,6 @@ router.post('/phone/check', async (request, response, next) => {
   } catch (error) { return next(error); }
 });
 
-export { router as authRouter };
 router.post('/firebase/phone', async (request, response, next) => {
   const parsed = z.object({
     idToken: z.string().min(20).max(10_000),

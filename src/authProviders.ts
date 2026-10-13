@@ -44,8 +44,18 @@ export async function sendVerificationEmail(email: string, firstName: string, to
     }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!result.ok) throw new Error('EMAIL_PROVIDER_SEND_FAILED');
-}
+  if (!result.ok) {
+    const details = await result.text();
+  
+    console.error('Resend verification email failed:', {
+      status: result.status,
+      details,
+    });
+  
+    throw new Error('EMAIL_PROVIDER_SEND_FAILED');
+  }
+  
+  console.log('Resend accepted verification email request');}
 
 export async function verifyGoogleIdToken(idToken: string) {
   const audiences = [env.GOOGLE_CLIENT_ID, ...(env.GOOGLE_CLIENT_IDS ?? '').split(',')]

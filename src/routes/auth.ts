@@ -126,7 +126,32 @@ const register: RequestHandler = async (request, response, next) => {
     }
     return response.status(202).json({ success: true, verificationRequired: true, platform: clientPlatform, message: 'Check your email to verify your LemonTrip account.' });
   } catch (error: any) {
-    if (error?.code === '23505') return response.status(202).json({ success: true, verificationRequired: true, platform: clientPlatform, message: 'If an account can be created, verification instructions will be sent.' });
+    if (error?.code === '23505') {
+      // An earlier attempt may have saved the account but failed to send the email.
+      // If that account is still unverified, refresh its password and resend the link.
+      // The email owner must still click the link, so this cannot hijack the account.
+      try {
+        const pending = (await query<UserRow>(
+          `SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status
+           FROM users WHERE lower(email) = $1 AND account_status = 'pending' AND email_verified = false AND google_id IS NULL`,
+          [parsed.data.email],
+        )).rows[0];
+        if (pending && rateAllowed(`signup-resend:${parsed.data.email}`, 3, 600_000)) {
+          await query('UPDATE users SET name = $1, first_name = $2, last_name = $3, password_hash = $4, updated_at = now() WHERE id = $5',
+            [names.name, names.firstName, names.lastName, await hashPassword(parsed.data.password), pending.id]);
+          try {
+            await storeAndSendEmailVerification({ ...pending, first_name: names.firstName }, clientPlatform);
+          } catch (sendError) {
+            if (providerUnavailable(sendError, 'EMAIL')) return response.status(503).json({ error: 'Email verification is not configured. Contact support.' });
+            return response.status(502).json({ error: 'The verification email could not be sent. Request another email shortly.' });
+          }
+          return response.status(202).json({ success: true, verificationRequired: true, platform: clientPlatform, message: 'Check your email to verify your LemonTrip account.' });
+        }
+      } catch (resendError) {
+        return next(resendError);
+      }
+      return response.status(202).json({ success: true, verificationRequired: true, platform: clientPlatform, message: 'If an account can be created, verification instructions will be sent.' });
+    }
     return next(error);
   }
 };
@@ -145,7 +170,7 @@ router.post('/login', async (request, response, next) => {
     const user = result.rows[0];
     if (!user || !user.password_hash || !(await verifyPassword(parsed.data.password, user.password_hash))) return response.status(401).json({ error: 'Invalid email or password.' });
     if (user.account_status === 'disabled') return response.status(403).json({ error: 'This account is unavailable. Contact support.' });
-    if (user.account_status === 'pending') return response.status(403).json({ error: 'Verify your email before signing in.' });
+    if (user.account_status === 'pending') return response.status(403).json({ error: 'Verify your email before signing in.', code: 'EMAIL_NOT_VERIFIED' });
     await query('UPDATE users SET platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
     return response.json(responseWithSession(response, user, clientPlatform, await createSession(user, clientPlatform, request)));
   } catch (error) {

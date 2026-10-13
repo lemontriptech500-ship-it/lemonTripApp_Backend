@@ -295,26 +295,48 @@ router.post('/google', async (request, response, next) => {
   if (!rateAllowed(`google:${request.ip}`, 20, 900_000)) return response.status(429).json({ error: 'Too many sign-in attempts. Try again later.' });
   try {
     const identity = await verifyGoogleIdToken(parsed.data.idToken);
-    // The website already stores Google accounts on users (google_id / provider), so log in from that row.
-    let user = (await query<UserRow>('SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE google_id = $1 OR lower(email) = $2 ORDER BY (google_id = $1) DESC NULLS LAST LIMIT 1', [identity.providerUserId, identity.email])).rows[0];
-    if (user && parsed.data.mode === 'signup') {
-      return response.status(409).json({ error: 'You already have an account with this Google account. Please log in to continue.', code: 'GOOGLE_ACCOUNT_EXISTS' });
+    // Google login requires a previously linked Google identity. Email equality
+    // alone never authorizes login or links a password account to Google.
+    let user = (await query<UserRow>(
+      'SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE google_id = $1 LIMIT 1',
+      [identity.providerUserId],
+    )).rows[0];
+    const emailOwner = (await query<UserRow>(
+      'SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE lower(email) = $1 LIMIT 1',
+      [identity.email],
+    )).rows[0];
+
+    if (parsed.data.mode === 'signup') {
+      if (user || emailOwner) {
+        return response.status(409).json({
+          error: 'An account already exists with this email. Please use its original sign-in method.',
+          code: 'ACCOUNT_EXISTS',
+        });
+      }
+      try {
+        user = (await query<UserRow>(
+          `INSERT INTO users (name, first_name, last_name, email, password_hash, email_verified, account_status, platform, google_id, provider)
+           VALUES ($1, $2, $3, $4, NULL, true, 'active', $5, $6, 'google')
+           RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`,
+          [identity.name, identity.firstName, identity.lastName, identity.email, clientPlatform, identity.providerUserId],
+        )).rows[0];
+      } catch (insertError) {
+        // A concurrent registration may have claimed this email or Google ID.
+        if (insertError && typeof insertError === 'object' && 'code' in insertError && insertError.code === '23505') {
+          return response.status(409).json({ error: 'An account already exists with this email. Please sign in.', code: 'ACCOUNT_EXISTS' });
+        }
+        throw insertError;
+      }
+    } else {
+      if (!user) {
+        return response.status(404).json({
+          error: emailOwner
+            ? 'This account was created with email and password. Please sign in with your password.'
+            : 'No Google-linked LemonTrip account found. Please sign up first.',
+          code: 'GOOGLE_ACCOUNT_NOT_FOUND',
+        });
+      }
     }
-    if (!user && parsed.data.mode === 'login') {
-      return response.status(404).json({ error: 'No LemonTrip account found for this Google account. Please sign up first.', code: 'GOOGLE_ACCOUNT_NOT_FOUND' });
-    }
-    if (!user) {
-      user = (await query<UserRow>(
-        `INSERT INTO users (name, first_name, last_name, email, password_hash, email_verified, account_status, platform, google_id, provider)
-         VALUES ($1, $2, $3, $4, NULL, true, 'active', $5, $6, 'google')
-         RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`,
-        [identity.name, identity.firstName, identity.lastName, identity.email, clientPlatform, identity.providerUserId],
-      )).rows[0];
-    } else if (!user.email_verified) {
-      user = (await query<UserRow>("UPDATE users SET email_verified = true, account_status = 'active' WHERE id = $1 RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status", [user.id])).rows[0];
-    }
-    // Remember the Google identity on the existing row without touching other data.
-    await query("UPDATE users SET google_id = COALESCE(google_id, $1), provider = COALESCE(provider, 'google') WHERE id = $2", [identity.providerUserId, user.id]);
     if (user.account_status !== 'active') return response.status(403).json({ error: 'This account is unavailable. Verify your email or contact support.' });
     await query('UPDATE users SET platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
     return response.json(responseWithSession(response, user, clientPlatform, await createSession(user, clientPlatform, request)));

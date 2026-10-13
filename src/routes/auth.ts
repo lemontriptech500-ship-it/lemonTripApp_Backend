@@ -121,6 +121,7 @@ const register: RequestHandler = async (request, response, next) => {
     try {
       await storeAndSendEmailVerification(created.rows[0], clientPlatform);
     } catch (error) {
+      console.error('[Signup] verification step failed:', error);
       if (providerUnavailable(error, 'EMAIL')) return response.status(503).json({ error: 'Email verification is not configured. Contact support.' });
       return response.status(502).json({ error: 'The verification email could not be sent. Request another email shortly.' });
     }
@@ -142,6 +143,7 @@ const register: RequestHandler = async (request, response, next) => {
           try {
             await storeAndSendEmailVerification({ ...pending, first_name: names.firstName }, clientPlatform);
           } catch (sendError) {
+            console.error('[Signup] verification resend failed:', sendError);
             if (providerUnavailable(sendError, 'EMAIL')) return response.status(503).json({ error: 'Email verification is not configured. Contact support.' });
             return response.status(502).json({ error: 'The verification email could not be sent. Request another email shortly.' });
           }
@@ -304,6 +306,7 @@ router.post('/email/send', async (request, response, next) => {
     const found = await query<UserRow>('SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE lower(email) = $1', [parsed.data.email]);
     if (found.rows[0] && !found.rows[0].email_verified) {
       try { await storeAndSendEmailVerification(found.rows[0], clientPlatform); } catch (error) {
+        console.error('[Email resend] failed:', error);
         if (providerUnavailable(error, 'EMAIL')) return response.status(503).json({ error: 'Email verification is temporarily unavailable.' });
         return response.status(502).json({ error: 'The verification email could not be sent. Try again later.' });
       }

@@ -30,22 +30,26 @@ Body: { "token": "<token from the link>", "newPassword": "min 8 characters" }
 
 
 
-App email links use `https://lemontrip.in/app/reset-password?token=...`. Set
-`APP_PASSWORD_RESET_URL=https://lemontrip.in/app/reset-password` on the app backend.
-The legacy `PASSWORD_RESET_URL` remains supported; its `/reset-password` path is
-automatically migrated to `/app/reset-password` so it cannot open the website form.
+App reset emails use `PUBLIC_API_URL/app/reset-password?token=...`, currently
+`https://lemontripapp-backend.onrender.com/app/reset-password?token=...`. Set
+`PUBLIC_API_URL=https://lemontripapp-backend.onrender.com` on the app backend.
+`APP_PASSWORD_RESET_URL` is an optional override. Existing `lemontrip.in` settings
+for either `/reset-password` or `/app/reset-password` automatically switch to the
+app backend opener. Deploy the app backend; this flow needs no website deployment.
 
-Deploy the website frontend as well as the app backend. The website's
-`NEXT_PUBLIC_APP_API_URL` must be the app backend origin (no `/api` suffix), currently
-`https://lemontripapp-backend.onrender.com`. The app reset page sends
-`{ token, newPassword }` directly to that backend's `/api/auth/reset-password`.
-The backend allows browser resets from `https://lemontrip.in` and
-`https://www.lemontrip.in`; add local/preview origins to `CORS_ORIGIN` when testing
-elsewhere. Website `/reset-password` and its `/api/v1` service are unchanged.
+The HTTPS opener attempts `lemontripmobile://reset-password?token=...`, the scheme
+already declared by the mobile app. It also offers an explicit “Open LemonTrip app”
+button and displays the reset code if the browser blocks automatic opening. The
+installed native app receives the token on its existing reset screen and submits
+`{ token, newPassword }` to `/api/auth/reset-password`. Visiting the opener does not
+consume the token or change the password. The page uses no-store caching and does
+not load external assets or analytics.
 
-Emails also contain a reset code that can be pasted into the existing app reset
-screen. Links issued before this deployment should be replaced by requesting a new
-email from the app. After resetting, return to the app and log in with the new password.
+Custom app links require a native build of LemonTrip installed on the device.
+Expo Go and desktop web previews should use the reset code on the app's existing
+Reset password screen. Emails contain this code as well. Request a fresh email
+after deployment; existing emailed URLs cannot be changed retroactively. After
+resetting, log in with the new password. Website password reset is unchanged.
 
 Migration `012_password_reset_compatibility.sql` adds the reset handler's `used_at`
 column if absent and preserves consumed tokens from older mobile schemas. Include

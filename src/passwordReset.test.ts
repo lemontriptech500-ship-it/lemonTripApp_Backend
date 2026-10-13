@@ -68,7 +68,7 @@ before(async () => {
   realPool.query = (text: string, values?: unknown[]) => run(text, values);
   realPool.connect = async () => ({ query: (text: string, values?: unknown[]) => run(text, values), release: () => undefined });
 
-  Object.assign(env, { EMAIL_PROVIDER: 'resend', EMAIL_API_KEY: 'test-email-key', EMAIL_FROM: 'LemonTrip <test@example.com>' });
+  Object.assign(env, { EMAIL_PROVIDER: 'resend', EMAIL_API_KEY: 'test-email-key', EMAIL_FROM: 'LemonTrip <test@example.com>', PUBLIC_API_URL: 'https://lemontripapp-backend.onrender.com' });
   originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = String(input);
@@ -116,12 +116,34 @@ test('forgot-password emails a link and stores only a hash of the token', async 
   const result = await post('/api/auth/forgot-password', { email: 'reset-hash@example.com' });
   assert.equal(result.status, 200);
   assert.ok(resetToken.length > 20);
-  assert.equal(new URL(resetLink).origin, 'https://lemontrip.in');
+  assert.equal(new URL(resetLink).origin, 'https://lemontripapp-backend.onrender.com');
   assert.equal(new URL(resetLink).pathname, '/app/reset-password');
   const hashed = await database.query('SELECT 1 FROM password_reset_tokens WHERE user_id = $1 AND token_hash = $2', [id, hashOpaqueToken(resetToken)]);
   assert.equal(hashed.rows.length, 1);
   const raw = await database.query('SELECT 1 FROM password_reset_tokens WHERE token_hash = $1', [resetToken]);
   assert.equal(raw.rows.length, 0);
+  for (let visit = 0; visit < 2; visit++) {
+    const opener = await fetch(`${baseUrl}/app/reset-password?token=${encodeURIComponent(resetToken)}`);
+    assert.equal(opener.status, 200);
+    assert.equal(opener.headers.get('cache-control'), 'no-store');
+    assert.equal(opener.headers.get('referrer-policy'), 'no-referrer');
+    const html = await opener.text();
+    assert.ok(html.includes(`lemontripmobile://reset-password?token=${resetToken}`));
+    assert.ok(html.includes('/app/reset-password/open.js'));
+  }
+  const unused = await database.query('SELECT 1 FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL', [id]);
+  assert.equal(unused.rows.length, 1);
+});
+
+test('app opener rejects missing, malformed and duplicate tokens', async () => {
+  for (const query of ['', '?token=short', '?token=%3Cscript%3E' + 'x'.repeat(25), '?token=' + 'x'.repeat(40) + '&token=' + 'y'.repeat(40)]) {
+    const response = await fetch(`${baseUrl}/app/reset-password${query}`);
+    assert.equal(response.status, 400);
+  }
+  const script = await fetch(`${baseUrl}/app/reset-password/open.js`);
+  assert.equal(script.status, 200);
+  assert.match(script.headers.get('content-type') ?? '', /javascript/);
+  assert.ok((await script.text()).includes('window.location.href = link.href'));
 });
 
 test('reset-password changes the password, signs out all sessions and works only once', async () => {
@@ -179,7 +201,7 @@ test('pending and disabled accounts get no reset link', async () => {
   assert.equal(resetToken, '');
 });
 
-test('legacy website reset URL is migrated to the separate app route', async () => {
+test('legacy website reset URL is migrated to the app backend opener', async () => {
   process.env.PASSWORD_RESET_URL = 'https://lemontrip.in/reset-password?source=email';
   try {
     await addUser('reset-legacy@example.com');
@@ -187,6 +209,7 @@ test('legacy website reset URL is migrated to the separate app route', async () 
     assert.equal(result.status, 200);
     const link = new URL(resetLink);
     assert.equal(link.pathname, '/app/reset-password');
+    assert.equal(link.origin, 'https://lemontripapp-backend.onrender.com');
     assert.equal(link.searchParams.get('source'), 'email');
     assert.ok(link.searchParams.get('token'));
   } finally {
@@ -202,6 +225,7 @@ test('app reset URL takes precedence and replaces a stale token', async () => {
     await post('/api/auth/forgot-password', { email: 'reset-configured@example.com' });
     const link = new URL(resetLink);
     assert.equal(link.pathname, '/app/reset-password');
+    assert.equal(link.origin, 'https://lemontripapp-backend.onrender.com');
     assert.equal(link.searchParams.get('source'), 'app');
     assert.equal(link.searchParams.getAll('token').length, 1);
     assert.notEqual(resetToken, 'stale');

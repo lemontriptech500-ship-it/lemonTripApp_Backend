@@ -437,7 +437,31 @@ router.get('/me', requireAuth, async (request, response, next) => {
 
 
 
-// 2) Paste this route just above: export { router as authRouter };
+// 2) Paste this route just above: // Called by the app BEFORE a Firebase SMS is sent, so a login for an unknown number
+// (or a signup for a number that already has an account) fails without sending an OTP.
+router.post('/phone/check', async (request, response, next) => {
+  const parsed = z.object({ phone: z.string().trim().min(7).max(40), purpose: z.enum(['signup', 'login']) }).safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: 'Invalid phone number.' });
+  if (!rateAllowed(`phone-check:${request.ip}`, 30, 900_000)) return response.status(429).json({ error: 'Too many attempts. Try again later.' });
+  let phone: string;
+  try { phone = normalizePhone(parsed.data.phone); } catch { return response.status(400).json({ error: 'Enter a valid phone number.' }); }
+  try {
+    const found = await query<{ account_status: string }>(
+      "SELECT account_status FROM users WHERE regexp_replace(phone, '\\D', '', 'g') = regexp_replace($1, '\\D', '', 'g') LIMIT 1",
+      [phone],
+    );
+    const user = found.rows[0];
+    if (parsed.data.purpose === 'login' && (!user || user.account_status !== 'active')) {
+      return response.status(404).json({ error: 'No account found for this number. Create an account first.', code: 'PHONE_ACCOUNT_NOT_FOUND' });
+    }
+    if (parsed.data.purpose === 'signup' && user) {
+      return response.status(409).json({ error: 'An account with this number already exists. Sign in instead.', code: 'PHONE_ACCOUNT_EXISTS' });
+    }
+    return response.json({ success: true, allowed: true });
+  } catch (error) { return next(error); }
+});
+
+export { router as authRouter };
 router.post('/firebase/phone', async (request, response, next) => {
   const parsed = z.object({
     idToken: z.string().min(20).max(10_000),
@@ -463,11 +487,11 @@ router.post('/firebase/phone', async (request, response, next) => {
     let user = found.rows[0];
  
     if (parsed.data.purpose === 'login') {
-      if (!user || user.account_status !== 'active') return response.status(404).json({ error: 'No account found for this number. Create an account first.' });
+      if (!user || user.account_status !== 'active') return response.status(404).json({ error: 'No account found for this number. Create an account first.', code: 'PHONE_ACCOUNT_NOT_FOUND' });
       await query('UPDATE users SET phone_verified = true, platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
       user.phone_verified = true;
     } else {
-      if (user) return response.status(409).json({ error: 'An account with this number already exists. Sign in instead.' });
+      if (user) return response.status(409).json({ error: 'An account with this number already exists. Sign in instead.', code: 'PHONE_ACCOUNT_EXISTS' });
       const names = parseName(parsed.data.firstName, parsed.data.lastName, parsed.data.name);
       user = (await query<UserRow>(
         `INSERT INTO users (name, first_name, last_name, email, phone, password_hash, email_verified, phone_verified, account_status, platform)

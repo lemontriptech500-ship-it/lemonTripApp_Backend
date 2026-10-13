@@ -12,8 +12,8 @@ const emailSchema = z.string().trim().email().max(254).transform((value) => valu
 // Sends the reset link by email. If no email provider is set up, the link is printed
 // to the server console in development only, so the flow can be tested without email.
 async function sendPasswordResetEmail(email: string, firstName: string, token: string) {
-  const base = process.env.PASSWORD_RESET_URL ?? `${env.PUBLIC_API_URL.replace(/\/$/, '')}/reset-password`;
-  const resetUrl = `${base}?token=${encodeURIComponent(token)}`;
+  const base = process.env.PASSWORD_RESET_URL?.trim() || 'https://lemontrip.in/reset-password';
+  const resetUrl = `${base}${base.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
   if (env.EMAIL_PROVIDER !== 'resend' || !env.EMAIL_API_KEY || !env.EMAIL_FROM) {
     if (process.env.NODE_ENV === 'production') throw new Error('EMAIL_PROVIDER_NOT_CONFIGURED');
     console.log(`[DEV] Password reset link for ${email}: ${resetUrl}`);

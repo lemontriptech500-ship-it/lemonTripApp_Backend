@@ -104,9 +104,9 @@ test('forgot-password emails a link and stores only a hash of the token', async 
   const result = await post('/api/auth/forgot-password', { email: 'reset-hash@example.com' });
   assert.equal(result.status, 200);
   assert.ok(resetToken.length > 20);
-  const hashed = await database.query('SELECT 1 FROM password_reset_tokens WHERE user_id = $1 AND token_hash = $2', [id, hashOpaqueToken(resetToken)]);
+  const hashed = await database.query('SELECT 1 FROM app_password_reset_tokens WHERE user_id = $1 AND token_hash = $2', [id, hashOpaqueToken(resetToken)]);
   assert.equal(hashed.rows.length, 1);
-  const raw = await database.query('SELECT 1 FROM password_reset_tokens WHERE token_hash = $1', [resetToken]);
+  const raw = await database.query('SELECT 1 FROM app_password_reset_tokens WHERE token_hash = $1', [resetToken]);
   assert.equal(raw.rows.length, 0);
 });
 
@@ -141,7 +141,7 @@ test('invalid and expired reset tokens are rejected', async () => {
   const id = await addUser('reset-expired@example.com');
   resetToken = '';
   await post('/api/auth/forgot-password', { email: 'reset-expired@example.com' });
-  await database.query("UPDATE password_reset_tokens SET expires_at = now() - interval '1 minute' WHERE user_id = $1", [id]);
+  await database.query("UPDATE app_password_reset_tokens SET expires_at = now() - interval '1 minute' WHERE user_id = $1", [id]);
   const expired = await post('/api/auth/reset-password', { token: resetToken, newPassword: 'BrandNewPass9' });
   assert.equal(expired.status, 400);
   const user = await database.query<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = $1', [id]);

@@ -51,9 +51,9 @@ router.post('/forgot-password', async (request, response, next) => {
     const user = found.rows[0];
     if (user) {
       const token = randomBytes(32).toString('base64url');
-      await query('UPDATE password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL', [user.id]);
+      await query('UPDATE app_password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL', [user.id]);
       await query(
-        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')",
+        "INSERT INTO app_password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')",
         [user.id, hashOpaqueToken(token)],
       );
       try {
@@ -82,7 +82,7 @@ router.post('/reset-password', async (request, response, next) => {
     try {
       await client.query('BEGIN');
       const used = await client.query<{ user_id: string }>(
-        'UPDATE password_reset_tokens SET consumed_at = now() WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now() RETURNING user_id',
+        'UPDATE app_password_reset_tokens SET consumed_at = now() WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now() RETURNING user_id',
         [hashOpaqueToken(parsed.data.token)],
       );
       const userId = used.rows[0]?.user_id;
@@ -98,7 +98,7 @@ router.post('/reset-password', async (request, response, next) => {
         await client.query('ROLLBACK');
         return response.status(400).json(invalid);
       }
-      await client.query('UPDATE password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL', [userId]);
+      await client.query('UPDATE app_password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL', [userId]);
       const revoked = await client.query('UPDATE user_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
       await client.query('COMMIT');
       return response.json({ success: true, sessionsLoggedOut: revoked.rowCount ?? 0 });

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { after, before, test } from 'node:test';
+import { runInNewContext } from 'node:vm';
 import { PGlite } from '@electric-sql/pglite';
 import { app } from './app.js';
 import { hashOpaqueToken, verifyPassword, hashPassword } from './auth.js';
@@ -130,12 +131,15 @@ test('forgot-password emails a link and stores only a hash of the token', async 
     const html = await opener.text();
     assert.ok(html.includes(`lemontripmobile://reset-password?token=${resetToken}`));
     assert.ok(html.includes('/app/reset-password/open.js'));
+    assert.ok(html.includes('id="reset-password-form"'));
+    assert.ok(html.includes(`name="token" value="${resetToken}"`));
+    assert.ok(!html.includes('Opening the LemonTrip app'));
   }
   const unused = await database.query('SELECT 1 FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL', [id]);
   assert.equal(unused.rows.length, 1);
 });
 
-test('app opener rejects missing, malformed and duplicate tokens', async () => {
+test('browser reset page rejects missing, malformed and duplicate tokens', async () => {
   for (const query of ['', '?token=short', '?token=%3Cscript%3E' + 'x'.repeat(25), '?token=' + 'x'.repeat(40) + '&token=' + 'y'.repeat(40)]) {
     const response = await fetch(`${baseUrl}/app/reset-password${query}`);
     assert.equal(response.status, 400);
@@ -143,7 +147,46 @@ test('app opener rejects missing, malformed and duplicate tokens', async () => {
   const script = await fetch(`${baseUrl}/app/reset-password/open.js`);
   assert.equal(script.status, 200);
   assert.match(script.headers.get('content-type') ?? '', /javascript/);
-  assert.ok((await script.text()).includes('window.location.href = link.href'));
+  assert.ok(!(await script.text()).includes('window.location'));
+});
+
+test('browser form validates confirmation and resets a password without an installed app', async () => {
+  const id = await addUser('reset-browser@example.com');
+  const token = 'browser-reset-token-' + 'x'.repeat(24);
+  await database.query("INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')", [id, hashOpaqueToken(token)]);
+  const script = await (await fetch(`${baseUrl}/app/reset-password/open.js`)).text();
+  const values: Record<string, { value: string }> = {
+    token: { value: token }, newPassword: { value: 'BrowserPassword9' }, confirmPassword: { value: 'MismatchPassword9' },
+  };
+  const button = { disabled: false };
+  const status = { textContent: '' };
+  let submit: (event: { preventDefault(): void }) => Promise<void> = async () => { throw new Error('Missing submit handler'); };
+  let requests = 0;
+  const form = {
+    hidden: false,
+    elements: { namedItem: (name: string) => values[name] },
+    querySelector: () => button,
+    addEventListener: (_name: string, handler: typeof submit) => { submit = handler; },
+    reset: () => { for (const field of Object.values(values)) field.value = ''; },
+  };
+  runInNewContext(script, {
+    document: { getElementById: (id: string) => id === 'reset-password-form' ? form : status },
+    AbortSignal,
+    fetch: async (path: string, init: RequestInit) => { requests++; return fetch(`${baseUrl}${path}`, init); },
+  });
+  const event = { preventDefault() {} };
+  await submit(event);
+  assert.equal(requests, 0);
+  assert.match(status.textContent, /Passwords must match/);
+  values.confirmPassword.value = values.newPassword.value;
+  await submit(event);
+  assert.equal(requests, 1);
+  assert.equal(form.hidden, true);
+  assert.match(status.textContent, /password has been updated/);
+  const user = await database.query<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = $1', [id]);
+  assert.equal(await verifyPassword('BrowserPassword9', user.rows[0].password_hash), true);
+  await submit(event);
+  assert.equal(requests, 1);
 });
 
 test('reset-password changes the password, signs out all sessions and works only once', async () => {

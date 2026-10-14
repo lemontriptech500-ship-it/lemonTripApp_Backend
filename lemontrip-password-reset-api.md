@@ -35,21 +35,22 @@ App reset emails use `PUBLIC_API_URL/app/reset-password?token=...`, currently
 `PUBLIC_API_URL=https://lemontripapp-backend.onrender.com` on the app backend.
 `APP_PASSWORD_RESET_URL` is an optional override. Existing `lemontrip.in` settings
 for either `/reset-password` or `/app/reset-password` automatically switch to the
-app backend opener. Deploy the app backend; this flow needs no website deployment.
+app backend reset page. Deploy the app backend; this flow needs no website deployment.
 
-The HTTPS opener attempts `lemontripmobile://reset-password?token=...`, the scheme
-already declared by the mobile app. It also offers an explicit “Open LemonTrip app”
-button and displays the reset code if the browser blocks automatic opening. The
-installed native app receives the token on its existing reset screen and submits
-`{ token, newPassword }` to `/api/auth/reset-password`. Visiting the opener does not
-consume the token or change the password. The page uses no-store caching and does
-not load external assets or analytics.
+The email link displays a browser form for a new password and confirmation. It
+submits `{ token, newPassword }` to `/api/auth/reset-password` on the same backend.
+It does not automatically open a custom app URL, so localhost web previews and
+Expo Go users can reset their passwords without installing a native build.
+Visiting the page does not consume the token or change the password. The page
+uses no-store caching and does not load external assets or analytics.
 
-Custom app links require a native build of LemonTrip installed on the device.
-Expo Go and desktop web previews should use the reset code on the app's existing
-Reset password screen. Emails contain this code as well. Request a fresh email
-after deployment; existing emailed URLs cannot be changed retroactively. After
-resetting, log in with the new password. Website password reset is unchanged.
+An optional “Reset inside the app instead” section contains the native app link
+and reset code. Custom app links require an installed native build. After resetting
+in the browser, return to your localhost preview, Expo Go, or native app and log in
+with the new password. Local testing should set `PUBLIC_API_URL` to the reachable
+local backend URL (by default `http://localhost:4000`); the preview must use that
+same backend. Existing links to this backend page show the updated form after
+deployment, provided their tokens have not expired. Website password reset is unchanged.
 
 Migration `012_password_reset_compatibility.sql` adds the reset handler's `used_at`
 column if absent and preserves consumed tokens from older mobile schemas. Include

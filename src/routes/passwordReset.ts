@@ -1,4 +1,6 @@
-import { Router } from 'express';
+import { Router, static as serveStatic } from 'express';
+import { fileURLToPath } from 'node:url';
+import { passwordResetPage } from '../passwordResetPage.js';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { hashOpaqueToken, hashPassword } from '../auth.js';
@@ -8,6 +10,10 @@ import { rateAllowed } from '../rateLimit.js';
 
 const router = Router();
 const linkRouter = Router();
+linkRouter.use('/reset-password/assets', serveStatic(fileURLToPath(new URL('../../public/password-reset/', import.meta.url)), {
+  index: false,
+  dotfiles: 'deny',
+}));
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
 
 // An HTTPS email link works in email clients that filter custom URL schemes.
@@ -15,10 +21,9 @@ const emailSchema = z.string().trim().email().max(254).transform((value) => valu
 linkRouter.get('/reset-password', (request, response) => {
   const parsed = z.string().min(20).max(200).regex(/^[A-Za-z0-9_-]+$/).safeParse(request.query.token);
   response.set('Cache-Control', 'no-store');
-  if (!parsed.success) return response.status(400).type('text').send('This reset link is incomplete. Request a new link in the LemonTrip app.');
+  if (!parsed.success) return response.status(400).type('html').send(passwordResetPage(null));
   const token = parsed.data;
-  const appLink = `lemontripmobile://reset-password?token=${encodeURIComponent(token)}`;
-  return response.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>Reset your LemonTrip app password</title></head><body><main><h1>Reset your LemonTrip app password</h1><p>Choose a new password below, then return to LemonTrip in your browser or app to log in.</p><form id="reset-password-form"><input type="hidden" name="token" value="${token}"><p><label for="new-password">New password</label><br><input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" required></p><p><label for="confirm-password">Confirm password</label><br><input id="confirm-password" name="confirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" required></p><button type="submit">Reset password</button></form><p id="reset-status" role="status" aria-live="polite"></p><noscript>Enable JavaScript to reset your password here, or use the reset code in LemonTrip.</noscript><p>This link expires in 30 minutes and works once.</p><details><summary>Reset inside the app instead</summary><p><a href="${appLink}">Open LemonTrip app</a></p><p>You can also choose “I already have a reset code” on the Forgot password screen and paste this code:</p><p><code>${token}</code></p></details></main><script src="/app/reset-password/open.js" defer></script></body></html>`);
+  return response.type('html').send(passwordResetPage(token));
 });
 
 linkRouter.get('/reset-password/open.js', (_request, response) => {
@@ -34,10 +39,12 @@ if (form && status) {
     const newPassword = form.elements.namedItem('newPassword').value;
     const confirmPassword = form.elements.namedItem('confirmPassword').value;
     if (newPassword.length < 8 || newPassword.length > 128 || newPassword !== confirmPassword) {
+      status.dataset.state = 'error';
       status.textContent = 'Passwords must match and contain 8–128 characters.';
       return;
     }
     button.disabled = true;
+    status.dataset.state = 'loading';
     status.textContent = 'Updating your password…';
     try {
       const response = await fetch('/api/auth/reset-password', {
@@ -49,14 +56,17 @@ if (form && status) {
       });
       const result = await response.json().catch(() => null);
       if (!response.ok || result?.success !== true) {
+        status.dataset.state = 'error';
         status.textContent = typeof result?.error === 'string' ? result.error : 'Unable to reset your password. Please try again.';
         button.disabled = false;
         return;
       }
       form.reset();
       form.hidden = true;
+      status.dataset.state = 'success';
       status.textContent = 'Your password has been updated. Return to LemonTrip in your browser or app and log in with your new password.';
     } catch {
+      status.dataset.state = 'error';
       status.textContent = 'Could not reach the account service. Check your connection and try again.';
       button.disabled = false;
     }

@@ -143,11 +143,24 @@ test('browser reset page rejects missing, malformed and duplicate tokens', async
   for (const query of ['', '?token=short', '?token=%3Cscript%3E' + 'x'.repeat(25), '?token=' + 'x'.repeat(40) + '&token=' + 'y'.repeat(40)]) {
     const response = await fetch(`${baseUrl}/app/reset-password${query}`);
     assert.equal(response.status, 400);
+    const html = await response.text();
+    assert.ok(html.includes('This link is incomplete'));
+    assert.ok(!html.includes('id="reset-password-form"'));
   }
   const script = await fetch(`${baseUrl}/app/reset-password/open.js`);
   assert.equal(script.status, 200);
   assert.match(script.headers.get('content-type') ?? '', /javascript/);
   assert.ok(!(await script.text()).includes('window.location'));
+});
+
+test('browser reset assets are served by the same backend with the existing content security policy', async () => {
+  for (const [file, type] of [['styles.css', 'text/css'], ['logo.png', 'image/png'], ['Manrope.ttf', 'font/ttf']]) {
+    const response = await fetch(`${baseUrl}/app/reset-password/assets/${file}`);
+    assert.equal(response.status, 200);
+    assert.ok(response.headers.get('content-type')?.includes(type));
+    assert.ok(response.headers.get('content-security-policy')?.includes("script-src 'self'"));
+    assert.ok((await response.arrayBuffer()).byteLength > 0);
+  }
 });
 
 test('browser form validates confirmation and resets a password without an installed app', async () => {
@@ -159,7 +172,7 @@ test('browser form validates confirmation and resets a password without an insta
     token: { value: token }, newPassword: { value: 'BrowserPassword9' }, confirmPassword: { value: 'MismatchPassword9' },
   };
   const button = { disabled: false };
-  const status = { textContent: '' };
+  const status = { textContent: '', dataset: { state: '' } };
   let submit: (event: { preventDefault(): void }) => Promise<void> = async () => { throw new Error('Missing submit handler'); };
   let requests = 0;
   const form = {

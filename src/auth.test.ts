@@ -15,6 +15,7 @@ let server: ReturnType<typeof app.listen>;
 let baseUrl = '';
 let database: PGlite;
 let verificationToken = '';
+let resetToken = '';
 let sentOtp = '';
 let originalFetch: typeof fetch;
 const realPool = pool as unknown as { query: (...args: any[]) => unknown; connect: () => unknown };
@@ -67,7 +68,11 @@ before(async () => {
       id varchar PRIMARY KEY, destination varchar NOT NULL, duration varchar NOT NULL,
       description text NOT NULL, starting_price varchar NOT NULL, highlights text[],
       image_url text, created_at timestamptz NOT NULL DEFAULT now(), price_amount numeric,
-      currency char(3), category varchar
+      currency char(3), category varchar,
+      short_description text, location text, best_for text, itinerary jsonb DEFAULT '[]',
+      inclusions text[], exclusions text[], accommodation_details text, meal_plan text,
+      transport_details text, notes text[], gallery text[], available_dates date[],
+      cancellation_policy text, terms_and_conditions text
     );
     CREATE TABLE visa_services (
       id text PRIMARY KEY, country text NOT NULL, visa_type text NOT NULL,
@@ -83,10 +88,19 @@ before(async () => {
     VALUES ('db-visa', 'DB Country', 'Tourist Visa', '5 days', 'From INR 2,000', 'https://example.com/visa.jpg', ARRAY['Passport', 'Photo']);
   `);
 
+  // Match the shared production auth schema, including Google account columns.
+  for (const file of ['006_shared_website_catalog_auth.sql', '010_google_account_sync.sql', '011_password_reset.sql', '012_password_reset_compatibility.sql']) {
+    await database.exec(await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8'));
+  }
+
   originalPoolQuery = realPool.query;
   originalPoolConnect = realPool.connect;
-  realPool.query = (text: string, values?: unknown[]) => database.query(text, values);
-  realPool.connect = async () => ({ query: (text: string, values?: unknown[]) => database.query(text, values), release: () => undefined });
+  const run = async (text: string, values?: unknown[]) => {
+    const result = await database.query(text, values);
+    return { ...result, rowCount: result.rows.length || (result.affectedRows ?? 0) };
+  };
+  realPool.query = run;
+  realPool.connect = async () => ({ query: run, release: () => undefined });
 
   Object.assign(env, {
     EMAIL_PROVIDER: 'resend', EMAIL_API_KEY: 'test-email-key', EMAIL_FROM: 'LemonTrip <test@example.com>',
@@ -99,7 +113,9 @@ before(async () => {
     if (url.startsWith('https://api.resend.com/emails')) {
       const body = JSON.parse(String(init?.body)) as { html: string };
       const match = body.html.match(/email\/verify\?token=([^&"]+)/);
-      verificationToken = match ? decodeURIComponent(match[1]) : '';
+      if (match) verificationToken = decodeURIComponent(match[1]);
+      const resetLink = body.html.match(/href="([^"]*\/app\/reset-password[^\"]*)"/);
+      if (resetLink) resetToken = new URL(resetLink[1].replace(/&amp;/g, '&')).searchParams.get('token') ?? '';
       return new Response('{}', { status: 200 });
     }
     if (url.includes('/Messages.json')) {
@@ -443,7 +459,7 @@ test('Google login with mode=login never creates an account; signup creates it w
   assert.equal(allowed.status, 200);
 });
 
-test('Google signup, repeat login, and verified existing-account linking share one user', async () => {
+test('Google signup and repeat login share one user without linking password accounts by email', async () => {
   nock('https://www.googleapis.com')
     .get('/oauth2/v1/certs')
     .reply(200, { 'lemontrip-test-key': googleCertificate }, { 'Cache-Control': 'public, max-age=3600' });
@@ -459,7 +475,7 @@ test('Google signup, repeat login, and verified existing-account linking share o
 
   const googleLogin = await fetch(`${baseUrl}/api/auth/google`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ idToken: googleToken, platform: 'website' }),
+    body: JSON.stringify({ idToken: googleToken, platform: 'website', mode: 'login' }),
   });
   assert.equal(googleLogin.status, 200);
   const secondSession = await googleLogin.json() as { user: { id: string }; platform: string };
@@ -476,9 +492,15 @@ test('Google signup, repeat login, and verified existing-account linking share o
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idToken: existingToken, platform: 'website' }),
   });
-  assert.equal(linked.status, 200);
-  const linkedSession = await linked.json() as { user: { id: string } };
-  assert.equal(linkedSession.user.id, existing.rows[0].id);
+  assert.equal(linked.status, 409);
+  assert.equal((await linked.json() as { code: string }).code, 'ACCOUNT_EXISTS');
+  const passwordAccountLogin = await fetch(`${baseUrl}/api/auth/google`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken: existingToken, platform: 'app', mode: 'login' }),
+  });
+  assert.equal(passwordAccountLogin.status, 404);
+  const existingLinks = await database.query<{ count: number }>('SELECT count(*)::int AS count FROM oauth_accounts WHERE user_id = $1', [existing.rows[0].id]);
+  assert.equal(existingLinks.rows[0].count, 0);
   const accounts = await database.query<{ count: number }>('SELECT count(*)::int AS count FROM users WHERE email = $1', ['existing-google@example.com']);
   assert.equal(accounts.rows[0].count, 1);
 
@@ -490,10 +512,41 @@ test('Google signup, repeat login, and verified existing-account linking share o
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idToken: unverifiedToken, platform: 'app' }),
   });
-  assert.equal(linkedUnverified.status, 200);
-  const verifiedSession = await linkedUnverified.json() as { user: { id: string; emailVerified: boolean } };
-  assert.equal(verifiedSession.user.id, unverified.rows[0].id);
-  assert.equal(verifiedSession.user.emailVerified, true);
+  assert.equal(linkedUnverified.status, 409);
+  const verifiedUser = await database.query<{ email_verified: boolean }>('SELECT email_verified FROM users WHERE id = $1', [unverified.rows[0].id]);
+  assert.equal(verifiedUser.rows[0].email_verified, false);
   const links = await database.query<{ count: number }>("SELECT count(*)::int AS count FROM oauth_accounts WHERE user_id = $1", [unverified.rows[0].id]);
-  assert.equal(links.rows[0].count, 1);
+  assert.equal(links.rows[0].count, 0);
+});
+
+test('app email signup, verification, login and password reset work together', async () => {
+  async function post(path: string, body: Record<string, unknown>) {
+    const response = await fetch(`${baseUrl}/api/auth/${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, platform: 'app' }),
+    });
+    return { status: response.status, body: await response.json() as Record<string, any> };
+  }
+  const email = 'app-reset-journey@example.com';
+  const oldPassword = 'OriginalPassword9';
+  const newPassword = 'UpdatedPassword10';
+  verificationToken = '';
+  resetToken = '';
+  assert.equal((await post('signup', { name: 'App Reset Traveler', email, password: oldPassword })).status, 202);
+  assert.ok(verificationToken);
+  assert.equal((await post('login', { email, password: oldPassword })).status, 403);
+  assert.equal((await post('email/verify', { token: verificationToken })).status, 200);
+  const login = await post('login', { email, password: oldPassword });
+  assert.equal(login.status, 200);
+  assert.ok(login.body.refreshToken);
+  assert.equal(login.body.platform, 'app');
+  assert.equal((await post('forgot-password', { email })).status, 200);
+  assert.ok(resetToken);
+  assert.equal((await post('reset-password', { token: resetToken, newPassword })).status, 200);
+  assert.equal((await post('refresh', { refreshToken: login.body.refreshToken })).status, 401);
+  assert.equal((await post('login', { email, password: oldPassword })).status, 401);
+  const updatedLogin = await post('login', { email, password: newPassword });
+  assert.equal(updatedLogin.status, 200);
+  assert.equal(updatedLogin.body.user.id, login.body.user.id);
+  assert.equal((await post('reset-password', { token: resetToken, newPassword: oldPassword })).status, 400);
 });

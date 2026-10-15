@@ -13,6 +13,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { passwordResetRouter, passwordResetLinkRouter } from './routes/passwordReset.js';
 import { profileRouter } from './routes/profile.js';
 import { walletRouter } from './routes/wallet.js';
+import { trainCheckoutPageRouter } from './routes/trainCheckoutPage.js';
 import { trainPaymentsRouter } from './routes/trainPayments.js';
 import { walletTopupsRouter } from './routes/walletTopups.js';
 
@@ -35,6 +36,7 @@ app.get('/health', (_request, response) => {
 app.use('/api/auth', authRouter);
 app.use('/api/auth', passwordResetRouter);
 app.use('/app', passwordResetLinkRouter);
+app.use('/pay/train', trainCheckoutPageRouter);
 app.use('/api/bookings', bookingsRouter);
 app.use('/api/bookings', bookingCancelRouter);
 app.use('/api/chat', chatRouter);

@@ -13,6 +13,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { passwordResetRouter, passwordResetLinkRouter } from './routes/passwordReset.js';
 import { profileRouter } from './routes/profile.js';
 import { walletRouter } from './routes/wallet.js';
+import { trainPaymentsRouter } from './routes/trainPayments.js';
 import { walletTopupsRouter } from './routes/walletTopups.js';
 
 export const app = express();
@@ -42,6 +43,7 @@ app.use('/api/content', contentRouter);
 app.use('/api/coupons', couponsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/profile', profileRouter);
+app.use('/api/payments/razorpay/trains', trainPaymentsRouter);
 app.use('/api/wallet/topups', walletTopupsRouter);
 app.use('/api/wallet', walletRouter);
 

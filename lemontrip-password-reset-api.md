@@ -52,7 +52,15 @@ local backend URL (by default `http://localhost:4000`); the preview must use tha
 same backend. Existing links to this backend page show the updated form after
 deployment, provided their tokens have not expired. Website password reset is unchanged.
 
-Migration `012_password_reset_compatibility.sql` adds the reset handler's `used_at`
+App recovery now uses `app_password_reset_tokens`, separate from website recovery.
+Run the new `013_app_password_reset_tokens.sql` through the normal reviewed migration
+process before deploying these handlers. It supports both fresh databases and
+installations where 011/012 are already recorded, and preserves consumption in an
+existing app-only table. Existing links whose tokens were stored in the former
+shared table need to be requested again; website tokens are not copied into the
+app namespace. No live migration is run as part of resolving this PR.
+
+Migration `012_password_reset_compatibility.sql` adds the legacy handler's `used_at`
 column if absent and preserves consumed tokens from older mobile schemas. Include
 it in the normal reviewed migration deployment; the migration runner's existing
 shared-schema approval requirements still apply. No live database changes are

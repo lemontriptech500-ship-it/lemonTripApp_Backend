@@ -63,6 +63,7 @@ before(async () => {
   await database.exec(userPlatform);
   await database.exec(passwordReset);
   await database.exec(await readFile(new URL('../migrations/012_password_reset_compatibility.sql', import.meta.url), 'utf8'));
+  await database.exec(await readFile(new URL('../migrations/013_app_password_reset_tokens.sql', import.meta.url), 'utf8'));
 
   originalPoolQuery = realPool.query;
   originalPoolConnect = realPool.connect;
@@ -119,9 +120,9 @@ test('forgot-password emails a link and stores only a hash of the token', async 
   assert.ok(resetToken.length > 20);
   assert.equal(new URL(resetLink).origin, 'https://lemontripapp-backend.onrender.com');
   assert.equal(new URL(resetLink).pathname, '/app/reset-password');
-  const hashed = await database.query('SELECT 1 FROM password_reset_tokens WHERE user_id = $1 AND token_hash = $2', [id, hashOpaqueToken(resetToken)]);
+  const hashed = await database.query('SELECT 1 FROM app_password_reset_tokens WHERE user_id = $1 AND token_hash = $2', [id, hashOpaqueToken(resetToken)]);
   assert.equal(hashed.rows.length, 1);
-  const raw = await database.query('SELECT 1 FROM password_reset_tokens WHERE token_hash = $1', [resetToken]);
+  const raw = await database.query('SELECT 1 FROM app_password_reset_tokens WHERE token_hash = $1', [resetToken]);
   assert.equal(raw.rows.length, 0);
   for (let visit = 0; visit < 2; visit++) {
     const opener = await fetch(`${baseUrl}/app/reset-password?token=${encodeURIComponent(resetToken)}`);
@@ -135,7 +136,7 @@ test('forgot-password emails a link and stores only a hash of the token', async 
     assert.ok(html.includes(`name="token" value="${resetToken}"`));
     assert.ok(!html.includes('Opening the LemonTrip app'));
   }
-  const unused = await database.query('SELECT 1 FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL', [id]);
+  const unused = await database.query('SELECT 1 FROM app_password_reset_tokens WHERE user_id = $1 AND used_at IS NULL', [id]);
   assert.equal(unused.rows.length, 1);
 });
 
@@ -166,7 +167,7 @@ test('browser reset assets are served by the same backend with the existing cont
 test('browser form validates confirmation and resets a password without an installed app', async () => {
   const id = await addUser('reset-browser@example.com');
   const token = 'browser-reset-token-' + 'x'.repeat(24);
-  await database.query("INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')", [id, hashOpaqueToken(token)]);
+  await database.query("INSERT INTO app_password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')", [id, hashOpaqueToken(token)]);
   const script = await (await fetch(`${baseUrl}/app/reset-password/open.js`)).text();
   const values: Record<string, { value: string }> = {
     token: { value: token }, newPassword: { value: 'BrowserPassword9' }, confirmPassword: { value: 'MismatchPassword9' },
@@ -233,6 +234,18 @@ test('reset-password changes the password, signs out all sessions and works only
   assert.equal(second.status, 400);
 });
 
+test('a website reset token cannot reset an app password', async () => {
+  const id = await addUser('reset-website-only@example.com');
+  const token = 'website-only-token-' + 'x'.repeat(24);
+  await database.query("INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')", [id, hashOpaqueToken(token)]);
+  const result = await post('/api/auth/reset-password', { token, newPassword: 'UnexpectedPass9' });
+  assert.equal(result.status, 400);
+  const user = await database.query<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = $1', [id]);
+  assert.equal(await verifyPassword('OldPassword1', user.rows[0].password_hash), true);
+  const websiteToken = await database.query('SELECT 1 FROM password_reset_tokens WHERE token_hash = $1 AND used_at IS NULL', [hashOpaqueToken(token)]);
+  assert.equal(websiteToken.rows.length, 1);
+});
+
 test('invalid and expired reset tokens are rejected', async () => {
   const wrong = await post('/api/auth/reset-password', { token: 'x'.repeat(40), newPassword: 'BrandNewPass9' });
   assert.equal(wrong.status, 400);
@@ -240,7 +253,7 @@ test('invalid and expired reset tokens are rejected', async () => {
   const id = await addUser('reset-expired@example.com');
   resetToken = '';
   await post('/api/auth/forgot-password', { email: 'reset-expired@example.com' });
-  await database.query("UPDATE password_reset_tokens SET expires_at = now() - interval '1 minute' WHERE user_id = $1", [id]);
+  await database.query("UPDATE app_password_reset_tokens SET expires_at = now() - interval '1 minute' WHERE user_id = $1", [id]);
   const expired = await post('/api/auth/reset-password', { token: resetToken, newPassword: 'BrandNewPass9' });
   assert.equal(expired.status, 400);
   const user = await database.query<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = $1', [id]);

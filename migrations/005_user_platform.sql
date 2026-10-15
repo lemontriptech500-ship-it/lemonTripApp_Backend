@@ -36,8 +36,18 @@ SET platform = COALESCE(
 )
 WHERE user_accounts.platform IS NULL;
 
+DO $$
+BEGIN
+  IF (
+    SELECT column_default
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'platform'
+  ) IS NULL THEN
+    ALTER TABLE users ALTER COLUMN platform SET DEFAULT 'app';
+  END IF;
+END $$;
+
 ALTER TABLE users
-  ALTER COLUMN platform SET DEFAULT 'app',
   ALTER COLUMN platform SET NOT NULL;
 
 ALTER TABLE users

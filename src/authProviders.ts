@@ -26,26 +26,81 @@ export async function sendSmsOtp(phone: string, code: string) {
   if (!result.ok) throw new Error('OTP_PROVIDER_SEND_FAILED');
 }
 
-export async function sendVerificationEmail(email: string, firstName: string, token: string) {
-  if (env.EMAIL_PROVIDER !== 'resend' || !env.EMAIL_API_KEY || !env.EMAIL_FROM) {
+
+export async function sendVerificationEmail(
+  email: string,
+  firstName: string,
+  token: string
+) {
+  console.log('[Email Verification] Starting:', {
+    provider: env.EMAIL_PROVIDER,
+    apiKeyConfigured: Boolean(env.EMAIL_API_KEY),
+    senderConfigured: Boolean(env.EMAIL_FROM),
+    publicUrlConfigured: Boolean(env.PUBLIC_API_URL),
+  });
+
+  if (
+    env.EMAIL_PROVIDER !== 'resend' ||
+    !env.EMAIL_API_KEY ||
+    !env.EMAIL_FROM ||
+    !env.PUBLIC_API_URL
+  ) {
     throw new Error('EMAIL_PROVIDER_NOT_CONFIGURED');
   }
 
-  const verificationUrl = `${env.PUBLIC_API_URL.replace(/\/$/, '')}/api/auth/email/verify?token=${encodeURIComponent(token)}`;
+  const verificationUrl =
+    `${env.PUBLIC_API_URL.replace(/\/$/, '')}` +
+    `/api/auth/email/verify?token=${encodeURIComponent(token)}`;
+
   const safeName = firstName.replace(/[<>"'&]/g, '');
-  const result = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.EMAIL_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from: env.EMAIL_FROM,
-      to: [email],
-      subject: 'Verify your LemonTrip email',
-      html: `<p>Hello ${safeName},</p><p>Verify your email to activate your LemonTrip account:</p><p><a href="${verificationUrl}">Verify email</a></p><p>This link expires in 30 minutes and can only be used once.</p>`,
-    }),
-    signal: AbortSignal.timeout(10_000),
+
+  let result: Response;
+
+  try {
+    result = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.EMAIL_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: env.EMAIL_FROM,
+        to: [email],
+        subject: 'Verify your LemonTrip email',
+        html: `
+          <p>Hello ${safeName},</p>
+          <p>Verify your email to activate your LemonTrip account:</p>
+          <p><a href="${verificationUrl}">Verify email</a></p>
+          <p>This link expires in 30 minutes and can only be used once.</p>
+        `,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (error) {
+    console.error('[Email Verification] Request failed:', error);
+    throw new Error('EMAIL_PROVIDER_SEND_FAILED');
+  }
+
+  if (!result.ok) {
+    const details = await result.text();
+
+    console.error('[Email Verification] Resend rejected request:', {
+      status: result.status,
+      details,
+    });
+
+    throw new Error('EMAIL_PROVIDER_SEND_FAILED');
+  }
+
+  const data = await result.json() as { id?: string };
+
+  console.log('[Email Verification] Resend accepted request:', {
+    emailId: data.id,
   });
-  if (!result.ok) throw new Error('EMAIL_PROVIDER_SEND_FAILED');
+
+  return data;
 }
+
 
 export async function verifyGoogleIdToken(idToken: string) {
   const audiences = [env.GOOGLE_CLIENT_ID, ...(env.GOOGLE_CLIENT_IDS ?? '').split(',')]
@@ -53,7 +108,10 @@ export async function verifyGoogleIdToken(idToken: string) {
     .map((value) => value.trim());
   if (!audiences.length) throw new Error('GOOGLE_PROVIDER_NOT_CONFIGURED');
 
-  const ticket = await googleClient.verifyIdToken({ idToken, audience: audiences });
+  const ticket = await Promise.race([
+    googleClient.verifyIdToken({ idToken, audience: audiences }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Invalid token: Google verification timed out')), 10_000)),
+  ]);
   const payload = ticket.getPayload();
   if (!payload?.sub || !payload.email || payload.email_verified !== true) throw new Error('GOOGLE_IDENTITY_NOT_VERIFIED');
   return {
@@ -64,3 +122,6 @@ export async function verifyGoogleIdToken(idToken: string) {
     lastName: payload.family_name?.trim() || null,
   };
 }
+
+
+

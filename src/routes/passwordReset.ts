@@ -1,4 +1,6 @@
-import { Router } from 'express';
+import { Router, static as serveStatic } from 'express';
+import { fileURLToPath } from 'node:url';
+import { passwordResetPage } from '../passwordResetPage.js';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { hashOpaqueToken, hashPassword } from '../auth.js';
@@ -7,13 +9,85 @@ import { pool, query } from '../db.js';
 import { rateAllowed } from '../rateLimit.js';
 
 const router = Router();
+const linkRouter = Router();
+linkRouter.use('/reset-password/assets', serveStatic(fileURLToPath(new URL('../../public/password-reset/', import.meta.url)), {
+  index: false,
+  dotfiles: 'deny',
+}));
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
+
+// An HTTPS email link works in email clients that filter custom URL schemes.
+// The browser form also works for localhost previews; visiting never consumes the token.
+linkRouter.get('/reset-password', (request, response) => {
+  const parsed = z.string().min(20).max(200).regex(/^[A-Za-z0-9_-]+$/).safeParse(request.query.token);
+  response.set('Cache-Control', 'no-store');
+  if (!parsed.success) return response.status(400).type('html').send(passwordResetPage(null));
+  const token = parsed.data;
+  return response.type('html').send(passwordResetPage(token));
+});
+
+linkRouter.get('/reset-password/open.js', (_request, response) => {
+  response.type('application/javascript').send(String.raw`
+const form = document.getElementById('reset-password-form');
+const status = document.getElementById('reset-status');
+if (form && status) {
+  const button = form.querySelector('button[type="submit"]');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (button.disabled) return;
+    const token = form.elements.namedItem('token').value;
+    const newPassword = form.elements.namedItem('newPassword').value;
+    const confirmPassword = form.elements.namedItem('confirmPassword').value;
+    if (newPassword.length < 8 || newPassword.length > 128 || newPassword !== confirmPassword) {
+      status.dataset.state = 'error';
+      status.textContent = 'Passwords must match and contain 8–128 characters.';
+      return;
+    }
+    button.disabled = true;
+    status.dataset.state = 'loading';
+    status.textContent = 'Updating your password…';
+    try {
+      const response = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'omit',
+        body: JSON.stringify({ token, newPassword }),
+        signal: AbortSignal.timeout(90_000),
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || result?.success !== true) {
+        status.dataset.state = 'error';
+        status.textContent = typeof result?.error === 'string' ? result.error : 'Unable to reset your password. Please try again.';
+        button.disabled = false;
+        return;
+      }
+      form.reset();
+      form.hidden = true;
+      status.dataset.state = 'success';
+      status.textContent = 'Your password has been updated. Return to LemonTrip in your browser or app and log in with your new password.';
+    } catch {
+      status.dataset.state = 'error';
+      status.textContent = 'Could not reach the account service. Check your connection and try again.';
+      button.disabled = false;
+    }
+  });
+}
+`);
+});
 
 // Sends the reset link by email. If no email provider is set up, the link is printed
 // to the server console in development only, so the flow can be tested without email.
 async function sendPasswordResetEmail(email: string, firstName: string, token: string) {
-  const base = process.env.PASSWORD_RESET_URL ?? `${env.PUBLIC_API_URL.replace(/\/$/, '')}/reset-password`;
-  const resetUrl = `${base}?token=${encodeURIComponent(token)}`;
+  const defaultLink = new URL('/app/reset-password', env.PUBLIC_API_URL);
+  const base = process.env.APP_PASSWORD_RESET_URL?.trim() || process.env.PASSWORD_RESET_URL?.trim();
+  let link = base ? new URL(base) : defaultLink;
+  // Replace either old website reset page with the app backend opener.
+  if (['http:', 'https:'].includes(link.protocol) && ['lemontrip.in', 'www.lemontrip.in'].includes(link.hostname) && /^\/(app\/)?reset-password\/?$/.test(link.pathname)) {
+    defaultLink.search = link.search;
+    link = defaultLink;
+  }
+  link.searchParams.set('token', token);
+  const resetUrl = link.toString();
   if (env.EMAIL_PROVIDER !== 'resend' || !env.EMAIL_API_KEY || !env.EMAIL_FROM) {
     if (process.env.NODE_ENV === 'production') throw new Error('EMAIL_PROVIDER_NOT_CONFIGURED');
     console.log(`[DEV] Password reset link for ${email}: ${resetUrl}`);
@@ -27,7 +101,7 @@ async function sendPasswordResetEmail(email: string, firstName: string, token: s
       from: env.EMAIL_FROM,
       to: [email],
       subject: 'Reset your LemonTrip password',
-      html: `<p>Hello ${safeName},</p><p>Use this link to reset your LemonTrip password:</p><p><a href="${resetUrl}">Reset password</a></p><p>This link expires in 30 minutes and can only be used once. If you did not ask for this, you can ignore this email.</p>`,
+      html: `<p>Hello ${safeName},</p><p>Use this link to reset your LemonTrip app password:</p><p><a href="${resetUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">Reset app password</a></p><p>You can also paste this reset code into the app: <code>${token}</code></p><p>This link expires in 30 minutes and can only be used once. If you did not ask for this, you can ignore this email.</p>`,
     }),
     signal: AbortSignal.timeout(10_000),
   });
@@ -51,7 +125,7 @@ router.post('/forgot-password', async (request, response, next) => {
     const user = found.rows[0];
     if (user) {
       const token = randomBytes(32).toString('base64url');
-      await query('UPDATE app_password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL', [user.id]);
+      await query('UPDATE app_password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [user.id]);
       await query(
         "INSERT INTO app_password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')",
         [user.id, hashOpaqueToken(token)],
@@ -82,7 +156,7 @@ router.post('/reset-password', async (request, response, next) => {
     try {
       await client.query('BEGIN');
       const used = await client.query<{ user_id: string }>(
-        'UPDATE app_password_reset_tokens SET consumed_at = now() WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now() RETURNING user_id',
+        'UPDATE app_password_reset_tokens SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() RETURNING user_id',
         [hashOpaqueToken(parsed.data.token)],
       );
       const userId = used.rows[0]?.user_id;
@@ -98,7 +172,7 @@ router.post('/reset-password', async (request, response, next) => {
         await client.query('ROLLBACK');
         return response.status(400).json(invalid);
       }
-      await client.query('UPDATE app_password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL', [userId]);
+      await client.query('UPDATE app_password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [userId]);
       const revoked = await client.query('UPDATE user_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
       await client.query('COMMIT');
       return response.json({ success: true, sessionsLoggedOut: revoked.rowCount ?? 0 });
@@ -113,4 +187,4 @@ router.post('/reset-password', async (request, response, next) => {
   }
 });
 
-export { router as passwordResetRouter };
+export { router as passwordResetRouter, linkRouter as passwordResetLinkRouter };

@@ -121,12 +121,39 @@ const register: RequestHandler = async (request, response, next) => {
     try {
       await storeAndSendEmailVerification(created.rows[0], clientPlatform);
     } catch (error) {
+      console.error('[Signup] verification step failed:', error);
       if (providerUnavailable(error, 'EMAIL')) return response.status(503).json({ error: 'Email verification is not configured. Contact support.' });
       return response.status(502).json({ error: 'The verification email could not be sent. Request another email shortly.' });
     }
     return response.status(202).json({ success: true, verificationRequired: true, platform: clientPlatform, message: 'Check your email to verify your LemonTrip account.' });
   } catch (error: any) {
-    if (error?.code === '23505') return response.status(202).json({ success: true, verificationRequired: true, platform: clientPlatform, message: 'If an account can be created, verification instructions will be sent.' });
+    if (error?.code === '23505') {
+      // An earlier attempt may have saved the account but failed to send the email.
+      // If that account is still unverified, refresh its password and resend the link.
+      // The email owner must still click the link, so this cannot hijack the account.
+      try {
+        const pending = (await query<UserRow>(
+          `SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status
+           FROM users WHERE lower(email) = $1 AND account_status = 'pending' AND email_verified = false AND google_id IS NULL`,
+          [parsed.data.email],
+        )).rows[0];
+        if (pending && rateAllowed(`signup-resend:${parsed.data.email}`, 3, 600_000)) {
+          await query('UPDATE users SET name = $1, first_name = $2, last_name = $3, password_hash = $4, updated_at = now() WHERE id = $5',
+            [names.name, names.firstName, names.lastName, await hashPassword(parsed.data.password), pending.id]);
+          try {
+            await storeAndSendEmailVerification({ ...pending, first_name: names.firstName }, clientPlatform);
+          } catch (sendError) {
+            console.error('[Signup] verification resend failed:', sendError);
+            if (providerUnavailable(sendError, 'EMAIL')) return response.status(503).json({ error: 'Email verification is not configured. Contact support.' });
+            return response.status(502).json({ error: 'The verification email could not be sent. Request another email shortly.' });
+          }
+          return response.status(202).json({ success: true, verificationRequired: true, platform: clientPlatform, message: 'Check your email to verify your LemonTrip account.' });
+        }
+      } catch (resendError) {
+        return next(resendError);
+      }
+      return response.status(202).json({ success: true, verificationRequired: true, platform: clientPlatform, message: 'If an account can be created, verification instructions will be sent.' });
+    }
     return next(error);
   }
 };
@@ -145,7 +172,7 @@ router.post('/login', async (request, response, next) => {
     const user = result.rows[0];
     if (!user || !user.password_hash || !(await verifyPassword(parsed.data.password, user.password_hash))) return response.status(401).json({ error: 'Invalid email or password.' });
     if (user.account_status === 'disabled') return response.status(403).json({ error: 'This account is unavailable. Contact support.' });
-    if (user.account_status === 'pending') return response.status(403).json({ error: 'Verify your email before signing in.' });
+    if (user.account_status === 'pending') return response.status(403).json({ error: 'Verify your email before signing in.', code: 'EMAIL_NOT_VERIFIED' });
     await query('UPDATE users SET platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
     return response.json(responseWithSession(response, user, clientPlatform, await createSession(user, clientPlatform, request)));
   } catch (error) {
@@ -279,6 +306,7 @@ router.post('/email/send', async (request, response, next) => {
     const found = await query<UserRow>('SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE lower(email) = $1', [parsed.data.email]);
     if (found.rows[0] && !found.rows[0].email_verified) {
       try { await storeAndSendEmailVerification(found.rows[0], clientPlatform); } catch (error) {
+        console.error('[Email resend] failed:', error);
         if (providerUnavailable(error, 'EMAIL')) return response.status(503).json({ error: 'Email verification is temporarily unavailable.' });
         return response.status(502).json({ error: 'The verification email could not be sent. Try again later.' });
       }
@@ -288,38 +316,54 @@ router.post('/email/send', async (request, response, next) => {
 });
 
 router.post('/google', async (request, response, next) => {
-  const parsed = z.object({ idToken: z.string().min(20).max(10_000), platform: platformSchema }).safeParse(request.body);
+  const parsed = z.object({ idToken: z.string().min(20).max(10_000), platform: platformSchema, mode: z.enum(['login', 'signup']).default('signup') }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: 'Invalid Google sign-in request.' });
   const clientPlatform = platform(parsed.data.platform);
   if (!clientPlatform) return response.status(400).json({ error: 'Platform must be app or website.' });
   if (!rateAllowed(`google:${request.ip}`, 20, 900_000)) return response.status(429).json({ error: 'Too many sign-in attempts. Try again later.' });
   try {
     const identity = await verifyGoogleIdToken(parsed.data.idToken);
+    // Google login requires a previously linked Google identity. Email equality
+    // alone never authorizes login or links a password account to Google.
     let user = (await query<UserRow>(
-      `SELECT users.id, users.email, users.name, users.first_name, users.last_name, users.phone, users.password_hash, users.email_verified, users.phone_verified, users.account_status
-       FROM oauth_accounts JOIN users ON users.id = oauth_accounts.user_id WHERE oauth_accounts.provider = 'google' AND oauth_accounts.provider_user_id = $1`,
+      'SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE google_id = $1 LIMIT 1',
       [identity.providerUserId],
     )).rows[0];
-    if (!user) {
-      user = (await query<UserRow>('SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE lower(email) = $1', [identity.email])).rows[0];
-      if (user && !user.email_verified) {
-        const verified = await query<UserRow>(
-          `UPDATE users SET email_verified = true, account_status = 'active', updated_at = now()
-           WHERE id = $1
-           RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`,
-          [user.id],
-        );
-        user = verified.rows[0];
+    const emailOwner = (await query<UserRow>(
+      'SELECT id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status FROM users WHERE lower(email) = $1 LIMIT 1',
+      [identity.email],
+    )).rows[0];
+
+    if (parsed.data.mode === 'signup') {
+      if (user || emailOwner) {
+        return response.status(409).json({
+          error: 'An account already exists with this email. Please use its original sign-in method.',
+          code: 'ACCOUNT_EXISTS',
+        });
       }
-      if (!user) {
+      try {
         user = (await query<UserRow>(
-          `INSERT INTO users (name, first_name, last_name, email, password_hash, email_verified, account_status, platform)
-           VALUES ($1, $2, $3, $4, NULL, true, 'active', $5)
+          `INSERT INTO users (name, first_name, last_name, email, password_hash, email_verified, account_status, platform, google_id, provider)
+           VALUES ($1, $2, $3, $4, NULL, true, 'active', $5, $6, 'google')
            RETURNING id, email, name, first_name, last_name, phone, password_hash, email_verified, phone_verified, account_status`,
-          [identity.name, identity.firstName, identity.lastName, identity.email, clientPlatform],
+          [identity.name, identity.firstName, identity.lastName, identity.email, clientPlatform, identity.providerUserId],
         )).rows[0];
+      } catch (insertError) {
+        // A concurrent registration may have claimed this email or Google ID.
+        if (insertError && typeof insertError === 'object' && 'code' in insertError && insertError.code === '23505') {
+          return response.status(409).json({ error: 'An account already exists with this email. Please sign in.', code: 'ACCOUNT_EXISTS' });
+        }
+        throw insertError;
       }
-      await query("INSERT INTO oauth_accounts (user_id, provider, provider_user_id, provider_email, linked_from_platform) VALUES ($1, 'google', $2, $3, $4) ON CONFLICT (provider, provider_user_id) DO NOTHING", [user.id, identity.providerUserId, identity.email, clientPlatform]);
+    } else {
+      if (!user) {
+        return response.status(404).json({
+          error: emailOwner
+            ? 'This account was created with email and password. Please sign in with your password.'
+            : 'No Google-linked LemonTrip account found. Please sign up first.',
+          code: 'GOOGLE_ACCOUNT_NOT_FOUND',
+        });
+      }
     }
     if (user.account_status !== 'active') return response.status(403).json({ error: 'This account is unavailable. Verify your email or contact support.' });
     await query('UPDATE users SET platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
@@ -393,7 +437,30 @@ router.get('/me', requireAuth, async (request, response, next) => {
 
 
 
-// 2) Paste this route just above: export { router as authRouter };
+// 2) Paste this route just above: // Called by the app BEFORE a Firebase SMS is sent, so a login for an unknown number
+// (or a signup for a number that already has an account) fails without sending an OTP.
+router.post('/phone/check', async (request, response, next) => {
+  const parsed = z.object({ phone: z.string().trim().min(7).max(40), purpose: z.enum(['signup', 'login']) }).safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: 'Invalid phone number.' });
+  if (!rateAllowed(`phone-check:${request.ip}`, 30, 900_000)) return response.status(429).json({ error: 'Too many attempts. Try again later.' });
+  let phone: string;
+  try { phone = normalizePhone(parsed.data.phone); } catch { return response.status(400).json({ error: 'Enter a valid phone number.' }); }
+  try {
+    const found = await query<{ account_status: string }>(
+      "SELECT account_status FROM users WHERE regexp_replace(phone, '\\D', '', 'g') = regexp_replace($1, '\\D', '', 'g') LIMIT 1",
+      [phone],
+    );
+    const user = found.rows[0];
+    if (parsed.data.purpose === 'login' && (!user || user.account_status !== 'active')) {
+      return response.status(404).json({ error: 'No account found for this number. Create an account first.', code: 'PHONE_ACCOUNT_NOT_FOUND' });
+    }
+    if (parsed.data.purpose === 'signup' && user) {
+      return response.status(409).json({ error: 'An account with this number already exists. Sign in instead.', code: 'PHONE_ACCOUNT_EXISTS' });
+    }
+    return response.json({ success: true, allowed: true });
+  } catch (error) { return next(error); }
+});
+
 router.post('/firebase/phone', async (request, response, next) => {
   const parsed = z.object({
     idToken: z.string().min(20).max(10_000),
@@ -419,11 +486,11 @@ router.post('/firebase/phone', async (request, response, next) => {
     let user = found.rows[0];
  
     if (parsed.data.purpose === 'login') {
-      if (!user || user.account_status !== 'active') return response.status(404).json({ error: 'No account found for this number. Create an account first.' });
+      if (!user || user.account_status !== 'active') return response.status(404).json({ error: 'No account found for this number. Create an account first.', code: 'PHONE_ACCOUNT_NOT_FOUND' });
       await query('UPDATE users SET phone_verified = true, platform = $1, updated_at = now() WHERE id = $2', [clientPlatform, user.id]);
       user.phone_verified = true;
     } else {
-      if (user) return response.status(409).json({ error: 'An account with this number already exists. Sign in instead.' });
+      if (user) return response.status(409).json({ error: 'An account with this number already exists. Sign in instead.', code: 'PHONE_ACCOUNT_EXISTS' });
       const names = parseName(parsed.data.firstName, parsed.data.lastName, parsed.data.name);
       user = (await query<UserRow>(
         `INSERT INTO users (name, first_name, last_name, email, phone, password_hash, email_verified, phone_verified, account_status, platform)

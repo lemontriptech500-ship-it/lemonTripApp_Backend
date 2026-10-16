@@ -16,6 +16,7 @@ import { walletRouter } from './routes/wallet.js';
 import { trainCheckoutPageRouter } from './routes/trainCheckoutPage.js';
 import { trainPaymentsRouter } from './routes/trainPayments.js';
 import { walletTopupsRouter } from './routes/walletTopups.js';
+import { visaRouter } from './routes/visa.js';
 
 export const app = express();
 if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY));
@@ -48,6 +49,7 @@ app.use('/api/profile', profileRouter);
 app.use('/api/payments/razorpay/trains', trainPaymentsRouter);
 app.use('/api/wallet/topups', walletTopupsRouter);
 app.use('/api/wallet', walletRouter);
+app.use('/api/v1/visa', visaRouter);
 
 app.use((_request, response) => {
   response.status(404).json({ error: 'Route not found' });

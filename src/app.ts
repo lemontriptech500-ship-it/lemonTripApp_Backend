@@ -13,6 +13,10 @@ import { notificationsRouter } from './routes/notifications.js';
 import { passwordResetRouter, passwordResetLinkRouter } from './routes/passwordReset.js';
 import { profileRouter } from './routes/profile.js';
 import { walletRouter } from './routes/wallet.js';
+import { trainCheckoutPageRouter } from './routes/trainCheckoutPage.js';
+import { trainPaymentsRouter } from './routes/trainPayments.js';
+import { bookingPaymentsRouter } from './routes/bookingPayments.js';
+import { walletTopupsRouter } from './routes/walletTopups.js';
 
 export const app = express();
 if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY));
@@ -33,6 +37,8 @@ app.get('/health', (_request, response) => {
 app.use('/api/auth', authRouter);
 app.use('/api/auth', passwordResetRouter);
 app.use('/app', passwordResetLinkRouter);
+app.use('/pay/train', trainCheckoutPageRouter);
+app.use('/pay/checkout', trainCheckoutPageRouter);
 app.use('/api/bookings', bookingsRouter);
 app.use('/api/bookings', bookingCancelRouter);
 app.use('/api/chat', chatRouter);
@@ -41,6 +47,9 @@ app.use('/api/content', contentRouter);
 app.use('/api/coupons', couponsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/profile', profileRouter);
+app.use('/api/payments/razorpay/trains', trainPaymentsRouter);
+app.use('/api/payments/razorpay', bookingPaymentsRouter);
+app.use('/api/wallet/topups', walletTopupsRouter);
 app.use('/api/wallet', walletRouter);
 
 app.use((_request, response) => {

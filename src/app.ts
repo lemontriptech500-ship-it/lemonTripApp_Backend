@@ -14,8 +14,8 @@ import { passwordResetRouter, passwordResetLinkRouter } from './routes/passwordR
 import { profileRouter } from './routes/profile.js';
 import { walletRouter } from './routes/wallet.js';
 import { trainCheckoutPageRouter } from './routes/trainCheckoutPage.js';
-import { trainPaymentsRouter } from './routes/trainPayments.js';
 import { bookingPaymentsRouter } from './routes/bookingPayments.js';
+import { trainPaymentsRouter } from './routes/trainPayments.js';
 import { walletTopupsRouter } from './routes/walletTopups.js';
 
 export const app = express();

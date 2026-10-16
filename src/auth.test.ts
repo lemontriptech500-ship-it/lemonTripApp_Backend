@@ -89,7 +89,7 @@ before(async () => {
   `);
 
   // Match the shared production auth schema, including Google account columns.
-  for (const file of ['006_shared_website_catalog_auth.sql', '010_google_account_sync.sql', '011_password_reset.sql', '012_password_reset_compatibility.sql']) {
+  for (const file of ['006_shared_website_catalog_auth.sql', '010_google_account_sync.sql', '011_password_reset.sql', '012_password_reset_compatibility.sql', '013_app_password_reset_tokens.sql']) {
     await database.exec(await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8'));
   }
 

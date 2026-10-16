@@ -1,4 +1,6 @@
-import { Router } from 'express';
+import { Router, static as serveStatic } from 'express';
+import { fileURLToPath } from 'node:url';
+import { passwordResetPage } from '../passwordResetPage.js';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { hashOpaqueToken, hashPassword } from '../auth.js';
@@ -8,21 +10,69 @@ import { rateAllowed } from '../rateLimit.js';
 
 const router = Router();
 const linkRouter = Router();
+linkRouter.use('/reset-password/assets', serveStatic(fileURLToPath(new URL('../../public/password-reset/', import.meta.url)), {
+  index: false,
+  dotfiles: 'deny',
+}));
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
 
 // An HTTPS email link works in email clients that filter custom URL schemes.
-// This page only opens the installed app; opening it never consumes the token.
+// The browser form also works for localhost previews; visiting never consumes the token.
 linkRouter.get('/reset-password', (request, response) => {
   const parsed = z.string().min(20).max(200).regex(/^[A-Za-z0-9_-]+$/).safeParse(request.query.token);
   response.set('Cache-Control', 'no-store');
-  if (!parsed.success) return response.status(400).type('text').send('This reset link is incomplete. Request a new link in the LemonTrip app.');
+  if (!parsed.success) return response.status(400).type('html').send(passwordResetPage(null));
   const token = parsed.data;
-  const appLink = `lemontripmobile://reset-password?token=${encodeURIComponent(token)}`;
-  return response.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>Reset your LemonTrip app password</title></head><body><main><h1>Reset your LemonTrip app password</h1><p>Opening the LemonTrip app to reset your password.</p><p><a id="open-app" href="${appLink}">Open LemonTrip app</a></p><p>If the app does not open, open Forgot password in the installed app, choose “I already have a reset code”, and paste this code:</p><p><code>${token}</code></p><p>When testing the app in a browser, paste the same code into its Reset password screen.</p><p>This link expires in 30 minutes and works once.</p></main><script src="/app/reset-password/open.js" defer></script></body></html>`);
+  return response.type('html').send(passwordResetPage(token));
 });
 
 linkRouter.get('/reset-password/open.js', (_request, response) => {
-  response.type('application/javascript').send("const link = document.getElementById('open-app'); if (link) window.location.href = link.href;");
+  response.type('application/javascript').send(String.raw`
+const form = document.getElementById('reset-password-form');
+const status = document.getElementById('reset-status');
+if (form && status) {
+  const button = form.querySelector('button[type="submit"]');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (button.disabled) return;
+    const token = form.elements.namedItem('token').value;
+    const newPassword = form.elements.namedItem('newPassword').value;
+    const confirmPassword = form.elements.namedItem('confirmPassword').value;
+    if (newPassword.length < 8 || newPassword.length > 128 || newPassword !== confirmPassword) {
+      status.dataset.state = 'error';
+      status.textContent = 'Passwords must match and contain 8–128 characters.';
+      return;
+    }
+    button.disabled = true;
+    status.dataset.state = 'loading';
+    status.textContent = 'Updating your password…';
+    try {
+      const response = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'omit',
+        body: JSON.stringify({ token, newPassword }),
+        signal: AbortSignal.timeout(90_000),
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || result?.success !== true) {
+        status.dataset.state = 'error';
+        status.textContent = typeof result?.error === 'string' ? result.error : 'Unable to reset your password. Please try again.';
+        button.disabled = false;
+        return;
+      }
+      form.reset();
+      form.hidden = true;
+      status.dataset.state = 'success';
+      status.textContent = 'Your password has been updated. Return to LemonTrip in your browser or app and log in with your new password.';
+    } catch {
+      status.dataset.state = 'error';
+      status.textContent = 'Could not reach the account service. Check your connection and try again.';
+      button.disabled = false;
+    }
+  });
+}
+`);
 });
 
 // Sends the reset link by email. If no email provider is set up, the link is printed
@@ -75,9 +125,9 @@ router.post('/forgot-password', async (request, response, next) => {
     const user = found.rows[0];
     if (user) {
       const token = randomBytes(32).toString('base64url');
-      await query('UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [user.id]);
+      await query('UPDATE app_password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [user.id]);
       await query(
-        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')",
+        "INSERT INTO app_password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')",
         [user.id, hashOpaqueToken(token)],
       );
       try {
@@ -106,7 +156,7 @@ router.post('/reset-password', async (request, response, next) => {
     try {
       await client.query('BEGIN');
       const used = await client.query<{ user_id: string }>(
-        'UPDATE password_reset_tokens SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() RETURNING user_id',
+        'UPDATE app_password_reset_tokens SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() RETURNING user_id',
         [hashOpaqueToken(parsed.data.token)],
       );
       const userId = used.rows[0]?.user_id;
@@ -122,7 +172,7 @@ router.post('/reset-password', async (request, response, next) => {
         await client.query('ROLLBACK');
         return response.status(400).json(invalid);
       }
-      await client.query('UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [userId]);
+      await client.query('UPDATE app_password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [userId]);
       const revoked = await client.query('UPDATE user_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
       await client.query('COMMIT');
       return response.json({ success: true, sessionsLoggedOut: revoked.rowCount ?? 0 });

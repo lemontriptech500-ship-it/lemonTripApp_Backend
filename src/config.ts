@@ -37,6 +37,11 @@ const envSchema = z.object({
   DEFAULT_PHONE_REGION: z.string().length(2).default('IN'),
   GROQ_API_KEY: groqApiKeySchema,
   GROQ_MODEL: z.string().default('qwen/qwen3.8-27b'),
+  AWS_REGION: z.string().default('ap-south-1'),
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  AWS_SESSION_TOKEN: z.string().optional(),
+  VISA_S3_BUCKET: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

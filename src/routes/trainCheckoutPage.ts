@@ -15,7 +15,7 @@ function clean(value: unknown, max: number) {
 router.get('/', (request, response) => {
   const keyId = process.env.RAZORPAY_KEY_ID?.trim();
   if (!keyId || !keyId.startsWith('rzp_test_')) {
-    return response.status(503).type('text/plain').send('Train payments are limited to Razorpay test mode.');
+    return response.status(503).type('text/plain').send('Payments are limited to Razorpay test mode.');
   }
   const order = clean(request.query.order, 60);
   const redirect = clean(request.query.redirect, 500);

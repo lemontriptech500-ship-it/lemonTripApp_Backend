@@ -14,9 +14,9 @@ const MAX_TOPUP_PAISE = 10000000;
 type WalletRow = { id: string; balance_paise: string; currency: string; status: string };
 
 function razorpayKeys() {
-  const keyId = process.env.RAZORPAY_KEY_ID;
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
-  return keyId && keySecret ? { keyId, keySecret } : null;
+  const keyId = process.env.RAZORPAY_KEY_ID?.trim();
+  const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim();
+  return keyId?.startsWith('rzp_test_') && keySecret ? { keyId, keySecret } : null;
 }
 
 function makeReference() {

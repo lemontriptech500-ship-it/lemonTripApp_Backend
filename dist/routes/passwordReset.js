@@ -6,12 +6,35 @@ import { env } from '../config.js';
 import { pool, query } from '../db.js';
 import { rateAllowed } from '../rateLimit.js';
 const router = Router();
+const linkRouter = Router();
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
+// An HTTPS email link works in email clients that filter custom URL schemes.
+// This page only opens the installed app; opening it never consumes the token.
+linkRouter.get('/reset-password', (request, response) => {
+    const parsed = z.string().min(20).max(200).regex(/^[A-Za-z0-9_-]+$/).safeParse(request.query.token);
+    response.set('Cache-Control', 'no-store');
+    if (!parsed.success)
+        return response.status(400).type('text').send('This reset link is incomplete. Request a new link in the LemonTrip app.');
+    const token = parsed.data;
+    const appLink = `lemontripmobile://reset-password?token=${encodeURIComponent(token)}`;
+    return response.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>Reset your LemonTrip app password</title></head><body><main><h1>Reset your LemonTrip app password</h1><p>Opening the LemonTrip app to reset your password.</p><p><a id="open-app" href="${appLink}">Open LemonTrip app</a></p><p>If the app does not open, open Forgot password in the installed app, choose “I already have a reset code”, and paste this code:</p><p><code>${token}</code></p><p>When testing the app in a browser, paste the same code into its Reset password screen.</p><p>This link expires in 30 minutes and works once.</p></main><script src="/app/reset-password/open.js" defer></script></body></html>`);
+});
+linkRouter.get('/reset-password/open.js', (_request, response) => {
+    response.type('application/javascript').send("const link = document.getElementById('open-app'); if (link) window.location.href = link.href;");
+});
 // Sends the reset link by email. If no email provider is set up, the link is printed
 // to the server console in development only, so the flow can be tested without email.
 async function sendPasswordResetEmail(email, firstName, token) {
-    const base = process.env.PASSWORD_RESET_URL ?? `${env.PUBLIC_API_URL.replace(/\/$/, '')}/reset-password`;
-    const resetUrl = `${base}?token=${encodeURIComponent(token)}`;
+    const defaultLink = new URL('/app/reset-password', env.PUBLIC_API_URL);
+    const base = process.env.APP_PASSWORD_RESET_URL?.trim() || process.env.PASSWORD_RESET_URL?.trim();
+    let link = base ? new URL(base) : defaultLink;
+    // Replace either old website reset page with the app backend opener.
+    if (['http:', 'https:'].includes(link.protocol) && ['lemontrip.in', 'www.lemontrip.in'].includes(link.hostname) && /^\/(app\/)?reset-password\/?$/.test(link.pathname)) {
+        defaultLink.search = link.search;
+        link = defaultLink;
+    }
+    link.searchParams.set('token', token);
+    const resetUrl = link.toString();
     if (env.EMAIL_PROVIDER !== 'resend' || !env.EMAIL_API_KEY || !env.EMAIL_FROM) {
         if (process.env.NODE_ENV === 'production')
             throw new Error('EMAIL_PROVIDER_NOT_CONFIGURED');
@@ -26,7 +49,7 @@ async function sendPasswordResetEmail(email, firstName, token) {
             from: env.EMAIL_FROM,
             to: [email],
             subject: 'Reset your LemonTrip password',
-            html: `<p>Hello ${safeName},</p><p>Use this link to reset your LemonTrip password:</p><p><a href="${resetUrl}">Reset password</a></p><p>This link expires in 30 minutes and can only be used once. If you did not ask for this, you can ignore this email.</p>`,
+            html: `<p>Hello ${safeName},</p><p>Use this link to reset your LemonTrip app password:</p><p><a href="${resetUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">Reset app password</a></p><p>You can also paste this reset code into the app: <code>${token}</code></p><p>This link expires in 30 minutes and can only be used once. If you did not ask for this, you can ignore this email.</p>`,
         }),
         signal: AbortSignal.timeout(10_000),
     });
@@ -49,7 +72,7 @@ router.post('/forgot-password', async (request, response, next) => {
         const user = found.rows[0];
         if (user) {
             const token = randomBytes(32).toString('base64url');
-            await query('UPDATE password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL', [user.id]);
+            await query('UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [user.id]);
             await query("INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '30 minutes')", [user.id, hashOpaqueToken(token)]);
             try {
                 await sendPasswordResetEmail(user.email, user.first_name ?? '', token);
@@ -78,7 +101,7 @@ router.post('/reset-password', async (request, response, next) => {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
-            const used = await client.query('UPDATE password_reset_tokens SET consumed_at = now() WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now() RETURNING user_id', [hashOpaqueToken(parsed.data.token)]);
+            const used = await client.query('UPDATE password_reset_tokens SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() RETURNING user_id', [hashOpaqueToken(parsed.data.token)]);
             const userId = used.rows[0]?.user_id;
             if (!userId) {
                 await client.query('ROLLBACK');
@@ -89,7 +112,7 @@ router.post('/reset-password', async (request, response, next) => {
                 await client.query('ROLLBACK');
                 return response.status(400).json(invalid);
             }
-            await client.query('UPDATE password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL', [userId]);
+            await client.query('UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [userId]);
             const revoked = await client.query('UPDATE user_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
             await client.query('COMMIT');
             return response.json({ success: true, sessionsLoggedOut: revoked.rowCount ?? 0 });
@@ -106,4 +129,4 @@ router.post('/reset-password', async (request, response, next) => {
         return next(error);
     }
 });
-export { router as passwordResetRouter };
+export { router as passwordResetRouter, linkRouter as passwordResetLinkRouter };

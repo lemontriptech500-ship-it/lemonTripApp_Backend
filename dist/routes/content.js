@@ -21,16 +21,29 @@ router.get('/:type', async (request, response, next) => {
                 })) });
         }
         if (type === 'package') {
-            const result = await query('SELECT id, destination, duration, description, starting_price, highlights, image_url, category FROM travel_packages ORDER BY created_at DESC, id');
+            const result = await query('SELECT id, destination, duration, description, starting_price, highlights, image_url, category, short_description, location, best_for, itinerary, inclusions, exclusions, accommodation_details, meal_plan, transport_details, notes, gallery, available_dates, cancellation_policy, terms_and_conditions FROM travel_packages ORDER BY created_at DESC, id');
             return response.json({ items: result.rows.map((row) => ({
                     id: row.id,
                     title: row.destination,
                     image: row.image_url ?? '',
                     duration: row.duration,
-                    description: row.description,
+                    description: row.short_description || row.description,
                     price: row.starting_price.replace(/^from\s+/i, '').replace(/\s*\(sample\)/i, ''),
                     highlights: (row.highlights ?? []).map((highlight) => highlight.replace(/^[\s"']+|[\s"',]+$/g, '')).filter(Boolean),
                     destination: row.destination,
+                    ...(row.gallery?.length ? { gallery: [row.image_url, ...row.gallery].filter(Boolean) } : {}),
+                    ...(row.itinerary?.length ? { itinerary: row.itinerary } : {}),
+                    ...(row.inclusions?.length ? { inclusions: row.inclusions } : {}),
+                    ...(row.exclusions?.length ? { exclusions: row.exclusions } : {}),
+                    ...(row.accommodation_details ? { hotels: [row.accommodation_details] } : {}),
+                    ...(row.meal_plan ? { meals: [row.meal_plan] } : {}),
+                    ...(row.transport_details ? { transfers: [row.transport_details] } : {}),
+                    ...(row.notes?.length ? { terms: row.notes.join(' ') } : {}),
+                    ...(row.cancellation_policy ? { cancellation: row.cancellation_policy } : {}),
+                    ...(row.terms_and_conditions ? { terms: [row.notes?.join(' '), row.terms_and_conditions].filter(Boolean).join(' ') } : {}),
+                    ...(row.available_dates?.length ? { availableDates: row.available_dates } : {}),
+                    ...(row.location ? { location: row.location } : {}),
+                    ...(row.best_for ? { bestFor: row.best_for } : {}),
                     categories: row.category ? [row.category.toLowerCase() === 'international' ? 'International' : 'Domestic'] : [],
                 })) });
         }
